@@ -7,9 +7,7 @@ SCRIPT_PATH=$(readlink -f $0)
 # EXECUTE CHROOT / ADD ARGUMENTS TO LAUNCH SPECIFIC PROGRAMS
 #
 # ---------------  START / STOP ARGUMENTS  ----------------- #
-# apache, beef-xss, dhcp, dnsmasq, hid-cmd, openvpn, ssh,
-# mana {stop}, mana-full, mana-noup, mana-noupeap, mana-simple,
-# mana-bdf, msf, fruitywifi
+# apache, beef-xss, dhcp, dnsmasq, hid-cmd, openvpn, ssh, msf
 # ---------------  SINGLE ARGUMENT ------------------------- #
 # hid-cmd, hid-cmd-elevated-win[7-8], wifite, iptables, update
 # start-rev-met, start-rev-met-elevated-win[8-7]
@@ -70,12 +68,6 @@ else
 
 	if [ "$1" == "iptables" ]; then
 		$BUSYBOX chroot $MNT sh /sdcard/nh_files/configs/iptables.conf
-	fi
-
-	#MANA (is now using only the stop scripts)
-
-	if [ "$1" == "mana-lollipop" ] && [ "$2" == "stop" ]; then
-		$BUSYBOX chroot $MNT /usr/bin/stop-mana-lollipop
 	fi
 
 	#MSF
@@ -180,21 +172,6 @@ else
 		ip link set wlan1 up
 		sleep 3
 		LANG=C PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin $BUSYBOX chroot $MNT sudo /usr/bin/python3 /usr/bin/wifite
-	fi
-
-	#FRUITYWIFI
-
-	if [ "$1" == "fruitywifi" ] && [ "$2" == "start" ]; then
-		$BUSYBOX chroot $MNT /etc/init.d/php7-fpm start
-		$BUSYBOX chroot $MNT /etc/init.d/fruitywifi start
-		$BUSYBOX chroot $MNT /etc/init.d/nginx start
-		sleep 15
-        am start -a android.intent.action.VIEW -d http://127.0.0.1:8000
-	fi
-	if [ "$1" == "fruitywifi" ] && [ "$2" == "stop" ]; then
-		$BUSYBOX chroot $MNT /etc/init.d/fruitywifi stop
-		$BUSYBOX chroot $MNT /etc/init.d/php7-fpm stop
-		$BUSYBOX chroot $MNT /etc/init.d/nginx stop
 	fi
 
 	#MACCHANGER
