@@ -1,0 +1,1256 @@
+--- a/hcxdumptool.c
++++ b/hcxdumptool.c
+@@ -51,6 +51,9 @@
+ #include "include/radiotap.h"
+ #include "include/raspberry.h"
+ #include "include/hcxdumptool.h"
++#include "nethunter_pmkid_policy.h"
++#define HCX_NETHUNTER_TARGET 1000
++#define HCX_NETHUNTER_CLIENT 1001
+ /*===========================================================================*/
+ /* global var */
+ static bool activemonitorflag = false;
+@@ -61,6 +64,15 @@
+ static bool watchdogflag = true;
+ static bool apbeacon = false;
+ static bool approberesponse = false;
++static nh_pmkid_policy nethunter_policy = { 0 };
++static u32 nethunter_frequency = 0;
++static u32 nethunter_current_frequency = 0;
++static unsigned int nethunter_frequency_options = 0;
++static bool nethunter_target_set = false;
++static bool nethunter_client_set = false;
++static bool nethunter_interface_set = false;
++static bool nethunter_output_set = false;
++static bool nethunter_tx_denied = false;
+ 
+ static uid_t uid = 1000;
+ static struct passwd *pwd = NULL;
+@@ -129,8 +141,6 @@
+ static u64 lifetime = 0;
+ static u32 ouiaprg = 0;
+ static u32 nicaprg = 0;
+-static u32 ouiclientrg = 0;
+-static u32 nicclientrg = 0;
+ static u64 replaycountrg = 0;
+ 
+ static struct timespec tspecakt = { 0 };
+@@ -357,6 +367,24 @@
+ static u8 epb[PCAPNG_SNAPLEN * 2] = { 0 };
+ static u8 epbown[WLTXBUFFER] = { 0 };
+ static u8 wltxbuffer[WLTXBUFFER] = { 0 };
++/* This is the sole path from generated 802.11 frames to the driver. */
++static ssize_t nethunter_tx_write(const void *packet, size_t length)
++{
++ssize_t result;
++if(wanteventflag != 0) { errno = ECANCELED; return -1; }
++result = nh_pmkid_write(&nethunter_policy, fd_socket_tx, packet, length, write);
++if((result < 0) && (errno == EPERM))
++	{
++	nethunter_tx_denied = true;
++	wanteventflag |= EXIT_ON_ERROR;
++	fprintf(stderr, "nethunter-pmkid-1: TX policy denied frame\n");
++	}
++return result;
++}
++static int nethunter_attach_bpf(int fd, const void *filter)
++{
++return setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER, filter, sizeof(struct sock_fprog));
++}
+ /*===========================================================================*/
+ static void checkinterfered(void)
+ {
+@@ -981,38 +1009,6 @@
+ }
+ /*===========================================================================*/
+ /* frequency handling */
+-/*---------------------------------------------------------------------------*/
+-static u32 channel_to_frequency(u16 channel, u16 band)
+-{
+-if(channel <= 0) return 0;
+-switch(band)
+-	{
+-	case NL80211_BAND_2GHZ:
+-	if(channel == 14) return 2484;
+-	else if (channel < 14) return 2407 + (channel * 5);
+-	break;
+-
+-	case NL80211_BAND_5GHZ:
+-	if(channel >= 182 && channel <= 196) return 4000 + (channel * 5);
+-	else return 5000 + channel * 5;
+-	break;
+-
+-	#if(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
+-	case NL80211_BAND_6GHZ:
+-	if(channel == 2) return 5935;
+-	if(channel <= 233) return 5950 + (channel * 5);
+-	break;
+-
+-	case NL80211_BAND_60GHZ:
+-	if(channel < 7) return 56160 + (channel * 2160);
+-	break;
+-
+-	case NL80211_BAND_S1GHZ:
+-	return 902000 + (channel * 500);
+-	#endif
+-	}
+-return 0;
+-}
+ /*---------------------------------------------------------------------------*/
+ static u16 frequency_to_channel(u32 frequency)
+ {
+@@ -1376,7 +1372,7 @@
+ ii += MAC_SIZE_NORM;
+ memcpy(&wltxbuffer[ii], &eaprequestiddata, EAPREQUESTID_SIZE);
+ ii += EAPREQUESTID_SIZE;
+-if(write(fd_socket_tx, &wltxbuffer, ii) == ii)	{
++if(nethunter_tx_write(&wltxbuffer, ii) == ii)	{
+ 	errortxcount = 0;
+ 	return;
+ 	}
+@@ -1675,7 +1671,7 @@
+ macftx->duration = 0;
+ wltxbuffer[RTHTX_SIZE + 1] = 0;
+ memcpy(macftx->addr1, macfrx->addr2, ETH_ALEN);
+-if((write(fd_socket_tx, wltxbuffer, RTHTX_SIZE + MAC_SIZE_ACK)) == RTHTX_SIZE + MAC_SIZE_ACK)
++if((nethunter_tx_write(wltxbuffer, RTHTX_SIZE + MAC_SIZE_ACK)) == RTHTX_SIZE + MAC_SIZE_ACK)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -1700,7 +1696,7 @@
+ memcpy(macftx->addr3, macfrx->addr2, ETH_ALEN);
+ macftx->sequence = __hcx16le(seqcounter1++ << 4);
+ if(seqcounter1 > BCD_MAX) seqcounter1 = 1;
+-if((write(fd_socket_tx, wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM +2)) == RTHTX_SIZE + MAC_SIZE_NORM +2)
++if((nethunter_tx_write(wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM +2)) == RTHTX_SIZE + MAC_SIZE_NORM +2)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -1723,7 +1719,7 @@
+ wltxbuffer[ii + 1] = 0;
+ macftx->duration = HCXTXDURATION;
+ memcpy(macftx->addr1, apdata->maca, ETH_ALEN);
+-memcpy(macftx->addr2, macbc, ETH_ALEN);
++memcpy(macftx->addr2, macclientrg, ETH_ALEN);
+ memcpy(macftx->addr3, apdata->maca, ETH_ALEN);
+ macftx->sequence = __hcx16le(seqcounter2++ << 4);
+ if(seqcounter1 > 4095) seqcounter2 = 1;
+@@ -1739,7 +1735,7 @@
+ wltxbuffer[ii +OFFSETPCS] = apdata->pcs;
+ wltxbuffer[ii +OFFSETAKM] = apdata->akm;
+ ii += ASSOCIATIONREQUEST_SIZE;
+-if((write(fd_socket_tx, &wltxbuffer, ii)) == ii)
++if((nethunter_tx_write(&wltxbuffer, ii)) == ii)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -1762,7 +1758,7 @@
+ wltxbuffer[ii + 1] = 0;
+ macftx->duration = HCXTXDURATION;
+ memcpy(macftx->addr1, apdata->maca, ETH_ALEN);
+-memcpy(macftx->addr2, apdata->macc, ETH_ALEN);
++memcpy(macftx->addr2, macclientrg, ETH_ALEN);
+ memcpy(macftx->addr3, apdata->maca, ETH_ALEN);
+ macftx->sequence = __hcx16le(seqcounter2++ << 4);
+ if(seqcounter1 > 4095) seqcounter2 = 1;
+@@ -1778,7 +1774,7 @@
+ wltxbuffer[ii +OFFSETPCS] = apdata->pcs;
+ wltxbuffer[ii +OFFSETAKM] = apdata->akm;
+ ii += ASSOCIATIONREQUEST_SIZE;
+-if((write(fd_socket_tx, &wltxbuffer, ii)) == ii)
++if((nethunter_tx_write(&wltxbuffer, ii)) == ii)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -1792,18 +1788,19 @@
+ /*---------------------------------------------------------------------------*/
+ static inline __attribute__((always_inline)) void send_80211_authenticationrequest(apdata_t *apdata)
+ {
++(void)apdata;
+ macftx = (ieee80211_mac_t*)&wltxbuffer[RTHTX_SIZE];
+ macftx->type = IEEE80211_FTYPE_MGMT;
+ macftx->subtype = IEEE80211_STYPE_AUTH;
+ wltxbuffer[RTHTX_SIZE + 1] = 0;
+ macftx->duration = HCXTXDURATION;
+ memcpy(macftx->addr1, macfrx->addr2, ETH_ALEN);
+-memcpy(macftx->addr2, apdata->macc, ETH_ALEN);
++memcpy(macftx->addr2, macclientrg, ETH_ALEN);
+ memcpy(macftx->addr3, macfrx->addr3, ETH_ALEN);
+ macftx->sequence = __hcx16le(seqcounter2++ << 4);
+ if(seqcounter1 > 4095) seqcounter2 = 1;
+ memcpy(&wltxbuffer[RTHTX_SIZE + MAC_SIZE_NORM], &authenticationrequestdata, AUTHENTICATIONREQUEST_SIZE);
+-if((write(fd_socket_tx, &wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONREQUEST_SIZE)) == RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONREQUEST_SIZE)
++if((nethunter_tx_write(&wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONREQUEST_SIZE)) == RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONREQUEST_SIZE)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -1829,7 +1826,7 @@
+ if(seqcounter1 > BCD_MAX) seqcounter1 = 1;
+ wltxbuffer[RTHTX_SIZE + MAC_SIZE_NORM] = WLAN_REASON_DISASSOC_STA_HAS_LEFT;
+ wltxbuffer[RTHTX_SIZE + MAC_SIZE_NORM +1] = 0;
+-if((write(fd_socket_tx, wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM +2)) == RTHTX_SIZE + MAC_SIZE_NORM +2)
++if((nethunter_tx_write(wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM +2)) == RTHTX_SIZE + MAC_SIZE_NORM +2)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -1855,7 +1852,7 @@
+ macftx->sequence = __hcx16le(seqcounter2++ << 4);
+ if(seqcounter1 > BCD_MAX) seqcounter2 = 1;
+ memcpy(wltxbuffer + RTHTX_SIZE + MAC_SIZE_NORM, authenticationrequestdata, AUTHENTICATIONREQUEST_SIZE);
+-if((write(fd_socket_tx, wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONREQUEST_SIZE)) == RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONREQUEST_SIZE)
++if((nethunter_tx_write(wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONREQUEST_SIZE)) == RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONREQUEST_SIZE)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -1886,7 +1883,7 @@
+ ii += MAC_SIZE_NORM;
+ memcpy(wltxbuffer + ii, eapolm1wpa1data, EAPOLM1WPA1DATA_SIZE);
+ ii += EAPOLM1WPA1DATA_SIZE;
+-if(write(fd_socket_tx, wltxbuffer, ii) == ii)
++if(nethunter_tx_write(wltxbuffer, ii) == ii)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -1916,7 +1913,7 @@
+ ii += MAC_SIZE_NORM;
+ memcpy(wltxbuffer + ii, eapolm1wpa2data, EAPOLM1WPA2DATA_SIZE);
+ ii += EAPOLM1WPA2DATA_SIZE;
+-if(write(fd_socket_tx, wltxbuffer, ii) == ii)
++if(nethunter_tx_write(wltxbuffer, ii) == ii)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -2227,7 +2224,7 @@
+ ii += IEEE80211_REASSOCIATIONRESPONSE_SIZE;
+ memcpy(wltxbuffer + ii, associationresponsedata, ASSOCIATIONRESPONSEDATA_SIZE);
+ ii += ASSOCIATIONRESPONSEDATA_SIZE;
+-if(write(fd_socket_tx, wltxbuffer, ii) == ii)
++if(nethunter_tx_write(wltxbuffer, ii) == ii)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -2419,7 +2416,7 @@
+ ii += IEEE80211_ASSOCIATIONRESPONSE_SIZE;
+ memcpy(wltxbuffer + ii, associationresponsedata, ASSOCIATIONRESPONSEDATA_SIZE);
+ ii += ASSOCIATIONRESPONSEDATA_SIZE;
+-if(write(fd_socket_tx, wltxbuffer, ii) == ii)
++if(nethunter_tx_write(wltxbuffer, ii) == ii)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -2515,7 +2512,7 @@
+ macftx->sequence = __hcx16le(seqcounter1++ << 4);
+ if(seqcounter1 > BCD_MAX) seqcounter1 = 1;
+ memcpy(wltxbuffer + RTHTX_SIZE + MAC_SIZE_NORM, authenticationresponsedata, AUTHENTICATIONRESPONSE_SIZE);
+-if((write(fd_socket_tx, wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONRESPONSE_SIZE)) == RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONRESPONSE_SIZE)
++if((nethunter_tx_write(wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONRESPONSE_SIZE)) == RTHTX_SIZE + MAC_SIZE_NORM + AUTHENTICATIONRESPONSE_SIZE)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -2701,7 +2698,7 @@
+ wltxbuffer[ii + OFFSETCHANNEL] = (u8)(scanlist + scanlistindex)->channel;
+ ii += PROBERESPONSEDATA_SIZE;
+ proberesponsetxindex += 1;
+-if((write(fd_socket_tx, wltxbuffer, ii)) == ii)
++if((nethunter_tx_write(wltxbuffer, ii)) == ii)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -2743,7 +2740,7 @@
+ memcpy(wltxbuffer + ii, proberesponsedata, PROBERESPONSEDATA_SIZE);
+ wltxbuffer[ii + OFFSETCHANNEL] = (u8)(scanlist + scanlistindex)->channel;
+ ii += PROBERESPONSEDATA_SIZE;
+-if((write(fd_socket_tx, wltxbuffer, ii)) == ii)
++if((nethunter_tx_write(wltxbuffer, ii)) == ii)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -2785,7 +2782,7 @@
+ memcpy(wltxbuffer + ii, proberesponsedata, PROBERESPONSEDATA_SIZE);
+ wltxbuffer[ii + OFFSETCHANNEL] = (u8)(scanlist + scanlistindex)->channel;
+ ii += PROBERESPONSEDATA_SIZE;
+-if((write(fd_socket_tx, wltxbuffer, ii)) == ii)
++if((nethunter_tx_write(wltxbuffer, ii)) == ii)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -3252,6 +3249,7 @@
+ ieee82011ptr = packetptr + __hcx16le(rth->it_len);
+ ieee82011len = packetlen - __hcx16le(rth->it_len);
+ if(ieee82011len <= MAC_SIZE_RTS) return;
++if(!nh_pmkid_rx_allowed(&nethunter_policy, ieee82011ptr, ieee82011len)) return;
+ macfrx = (ieee80211_mac_t*)ieee82011ptr;
+ if((macfrx->from_ds == 1) && (macfrx->to_ds == 1))
+ 	{
+@@ -3327,7 +3325,7 @@
+ macftx->sequence = __hcx16le(seqcounter2++ << 4);
+ if(seqcounter1 > 4095) seqcounter4 = 1;
+ memcpy(&wltxbuffer[RTHTX_SIZE + MAC_SIZE_NORM], &proberequest_undirected_data, PROBEREQUEST_UNDIRECTED_SIZE);
+-if((write(fd_socket_tx, &wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM + PROBEREQUEST_UNDIRECTED_SIZE)) == RTHTX_SIZE + MAC_SIZE_NORM + PROBEREQUEST_UNDIRECTED_SIZE)
++if((nethunter_tx_write(&wltxbuffer, RTHTX_SIZE + MAC_SIZE_NORM + PROBEREQUEST_UNDIRECTED_SIZE)) == RTHTX_SIZE + MAC_SIZE_NORM + PROBEREQUEST_UNDIRECTED_SIZE)
+ 	{
+ 	errortxcount = 0;
+ 	return;
+@@ -4188,6 +4186,8 @@
+ 				{
+ 				if(*((u32*)nla_data(nla)) == NL80211_IFTYPE_MONITOR) ifaktstatus |= IF_STAT_MONITOR;
+ 				}
++			if((nla->nla_type == NL80211_ATTR_WIPHY_FREQ) && (nla->nla_len >= 8))
++				nethunter_current_frequency = *((u32*)nla_data(nla));
+ 			nla = nla_next(nla, &nlremlen);
+ 			}
+ 		}
+@@ -4416,288 +4416,15 @@
+ /*---------------------------------------------------------------------------*/
+ static inline __attribute__((always_inline)) bool nl_set_frequency(void)
+ {
+-static ssize_t i;
+-static ssize_t msglen;
+-static struct nlmsghdr *nlh;
+-static struct genlmsghdr *glh;
+-static struct nlattr *nla;
+-static struct nlmsgerr *nle;
+-
+-i = 0;
+-if(((scanlist + scanlistindex)->frequency) == 0) scanlistindex = 0;
+-nlh = (struct nlmsghdr*)nltxbuffer;
+-nlh->nlmsg_type = nlfamily;
+-nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+-nlh->nlmsg_seq = nlseqcounter++;
+-nlh->nlmsg_pid = hcxpid;
+-i += sizeof(struct nlmsghdr);
+-glh = (struct genlmsghdr*)(nltxbuffer + i);
+-glh->cmd = NL80211_CMD_SET_WIPHY;
+-glh->version = 1;
+-glh->reserved = 0;
+-i += sizeof(struct genlmsghdr);
+-nla = (struct nlattr*)(nltxbuffer + i);
+-nla->nla_len = 8;
+-nla->nla_type = NL80211_ATTR_IFINDEX;
+-*(u32*)nla_data(nla) = ifaktindex;
+-i += 8;
+-nla = (struct nlattr*)(nltxbuffer + i);
+-nla->nla_len = 8;
+-nla->nla_type = NL80211_ATTR_WIPHY_FREQ;
+-*(u32*)nla_data(nla) = (scanlist + scanlistindex)->frequency;
+-i += 8;
+-nlh->nlmsg_len = i;
+-if((write(fd_socket_nl, nltxbuffer, i)) != i)
+-	{
+-	#ifdef HCXDEBUG
+-	fprintf(fh_debug, "nl_set_frequency failed: %s\n", strerror(errno));
+-	#endif
+-	return false;
+-	}
+-while(1)
+-	{
+-	msglen = read(fd_socket_nl, &nlrxbuffer, NLRX_SIZE);
+-	if(msglen == -1) break;
+-	if(msglen == 0) break;
+-	for(nlh = (struct nlmsghdr*)nlrxbuffer; NLMSG_OK(nlh, (u32)msglen); nlh = NLMSG_NEXT(nlh, msglen))
+-		{
+-		if(nlh->nlmsg_type == NLMSG_DONE) return true;
+-		if(nlh->nlmsg_type == NLMSG_ERROR)
+-			{
+-			nle = (struct nlmsgerr*)(nlrxbuffer + sizeof(struct nlmsghdr));
+-			if(nle->error == 0) return true;
+-			errorcount++;
+-			return false;
+-			}
+-		}
+-	}
+-return false;
+-}
+-/*---------------------------------------------------------------------------*/
+-static inline void nl_set_powersave_off(void)
+-{
+-static ssize_t i;
+-static ssize_t msglen;
+-static struct nlmsghdr *nlh;
+-static struct genlmsghdr *glh;
+-static struct nlattr *nla;
+-static struct nlmsgerr *nle;
+-
+-i = 0;
+-nlh = (struct nlmsghdr*)nltxbuffer;
+-nlh->nlmsg_type = nlfamily;
+-nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+-nlh->nlmsg_seq = nlseqcounter++;
+-nlh->nlmsg_pid = hcxpid;
+-i += sizeof(struct nlmsghdr);
+-glh = (struct genlmsghdr*)(nltxbuffer + i);
+-glh->cmd = NL80211_CMD_SET_INTERFACE;
+-glh->version = 1;
+-glh->reserved = 0;
+-i += sizeof(struct genlmsghdr);
+-nla = (struct nlattr*)(nltxbuffer + i);
+-nla->nla_len = 8;
+-nla->nla_type = NL80211_ATTR_IFINDEX;
+-*(u32*)nla_data(nla) = ifaktindex;
+-i += 8;
+-nla = (struct nlattr*)(nltxbuffer + i);
+-nla->nla_len = 8;
+-nla->nla_type = NL80211_ATTR_PS_STATE;
+-*(u32*)nla_data(nla) = NL80211_PS_DISABLED;
+-i += 8;
+-nlh->nlmsg_len = i;
+-if((write(fd_socket_nl, nltxbuffer, i)) != i)
+-	{
+-	#ifdef HCXDEBUG
+-	fprintf(fh_debug, "nl_set_powersave_off failed: %s\n", strerror(errno));
+-	#endif
+-	return;
+-	}
+-while(1)
+-	{
+-	msglen = read(fd_socket_nl, &nlrxbuffer, NLRX_SIZE);
+-	if(msglen == -1) break;
+-	if(msglen == 0) break;
+-	for(nlh = (struct nlmsghdr*)nlrxbuffer; NLMSG_OK(nlh, (u32)msglen); nlh = NLMSG_NEXT(nlh, msglen))
+-		{
+-		if(nlh->nlmsg_type == NLMSG_DONE) return;
+-		if(nlh->nlmsg_type == NLMSG_ERROR)
+-			{
+-			nle = (struct nlmsgerr*)(nlrxbuffer + sizeof(struct nlmsghdr));
+-			if(nle->error == 0) return;
+-			errorcount++;
+-			return;
+-			}
+-		}
+-	}
+-return;
+-}
+-/*---------------------------------------------------------------------------*/
+-static inline bool nl_set_monitormode(void)
+-{
+-static ssize_t i;
+-static ssize_t msglen;
+-static struct nlmsghdr *nlh;
+-static struct genlmsghdr *glh;
+-static struct nlattr *nla;
+-static struct nlmsgerr *nle;
+-
+-i = 0;
+-nlh = (struct nlmsghdr*)nltxbuffer;
+-nlh->nlmsg_type = nlfamily;
+-nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+-nlh->nlmsg_seq = nlseqcounter++;
+-nlh->nlmsg_pid = hcxpid;
+-i += sizeof(struct nlmsghdr);
+-glh = (struct genlmsghdr*)(nltxbuffer + i);
+-glh->cmd = NL80211_CMD_SET_INTERFACE;
+-glh->version = 1;
+-glh->reserved = 0;
+-i += sizeof(struct genlmsghdr);
+-nla = (struct nlattr*)(nltxbuffer + i);
+-nla->nla_len = 8;
+-nla->nla_type = NL80211_ATTR_IFINDEX;
+-*(u32*)nla_data(nla) = ifaktindex;
+-i += 8;
+-nla = (struct nlattr*)(nltxbuffer + i);
+-nla->nla_len = 8;
+-nla->nla_type = NL80211_ATTR_IFTYPE;
+-*(u32*)nla_data(nla) = NL80211_IFTYPE_MONITOR;
+-i += 8;
+-if(activemonitorflag == true)
+-	{
+-	if((ifakttype & IFTYPEMONACT) == IFTYPEMONACT)
+-		{
+-		nla = (struct nlattr*)(nltxbuffer + i);
+-		nla->nla_len = 8;
+-		nla->nla_type = NL80211_ATTR_MNTR_FLAGS;
+-		nla = (struct nlattr*)nla_data(nla);
+-		nla->nla_len = 4;
+-		nla->nla_type = NL80211_MNTR_FLAG_ACTIVE;
+-		i += 8;
+-		}
+-	else fprintf(stderr, "\nWarning: active monitor mode requested by user, but not supported by driver!\n");
+-	}
+-nlh->nlmsg_len = i;
+-if((write(fd_socket_nl, nltxbuffer, i)) != i) return false;
+-while(1)
+-	{
+-	msglen = read(fd_socket_nl, &nlrxbuffer, NLRX_SIZE);
+-	if(msglen == -1) break;
+-	if(msglen == 0) break;
+-	for(nlh = (struct nlmsghdr*)nlrxbuffer; NLMSG_OK(nlh, (u32)msglen); nlh = NLMSG_NEXT(nlh, msglen))
+-		{
+-		if(nlh->nlmsg_type == NLMSG_DONE) return true;
+-		if(nlh->nlmsg_type == NLMSG_ERROR)
+-			{
+-			nle = (struct nlmsgerr*)(nlrxbuffer + sizeof(struct nlmsghdr));
+-			if(nle->error == 0) return true;
+-			errorcount++;
+-			return false;
+-			}
+-		}
+-	}
+-return false;
+-}
+-/*===========================================================================*/
+-/* RTLINK */
++/* InterfaceController owns tuning. A single prepared frequency is immutable. */
++scanlistindex = 0;
++return nethunter_policy.interface_ready &&
++       nethunter_current_frequency == nethunter_frequency;
++}
++/*---------------------------------------------------------------------------*/
+ static void *rta_data(const struct rtattr *rta)
+ {
+ return (u8*)rta +4;
+-}
+-/*---------------------------------------------------------------------------*/
+-static bool rt_set_interfacemac(void)
+-{
+-static ssize_t i;
+-static ssize_t msglen;
+-static struct nlmsghdr *nlh;
+-static struct ifinfomsg *ifih;
+-static struct rtattr *rta;
+-static struct nlmsgerr *nle;
+-
+-i = 0;
+-nlh = (struct nlmsghdr*)nltxbuffer;
+-nlh->nlmsg_type = RTM_NEWLINK;
+-nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+-nlh->nlmsg_seq = nlseqcounter++;
+-nlh->nlmsg_pid = hcxpid;
+-i += sizeof(struct nlmsghdr);
+-ifih = (struct ifinfomsg*)(nltxbuffer+ i);
+-ifih->ifi_family = 0;
+-ifih->ifi_type = 0;
+-ifih->ifi_index = ifaktindex;
+-ifih->ifi_flags = 0;
+-ifih->ifi_change = 0;
+-i += sizeof(struct ifinfomsg);
+-rta = (struct rtattr*)(nltxbuffer+ i);
+-rta->rta_len = 10;
+-rta->rta_type = IFLA_ADDRESS;
+-memcpy(nltxbuffer + i + 4, macclientrg, ETH_ALEN +2);
+-i += 12;
+-nlh->nlmsg_len = i;
+-if((write(fd_socket_rt, nltxbuffer, i)) != i) return false;
+-while(1)
+-	{
+-	msglen = read(fd_socket_rt, &nlrxbuffer, NLRX_SIZE);
+-	if(msglen == -1) break;
+-	if(msglen == 0) break;
+-	for(nlh = (struct nlmsghdr*)nlrxbuffer; NLMSG_OK(nlh, (u32)msglen); nlh = NLMSG_NEXT(nlh, msglen))
+-		{
+-		if(nlh->nlmsg_type == NLMSG_DONE) return false;
+-		if(nlh->nlmsg_type == NLMSG_ERROR)
+-			{
+-			nle = (struct nlmsgerr*)(nlrxbuffer + sizeof(struct nlmsghdr));
+-			if(nle->error == 0) return true;
+-			errorcount++;
+-			return false;
+-			}
+-		}
+-	}
+-return false;
+-}
+-/*---------------------------------------------------------------------------*/
+-static bool rt_set_interface(u32 condition)
+-{
+-static ssize_t i;
+-static ssize_t msglen;
+-static struct nlmsghdr *nlh;
+-static struct ifinfomsg *ifih;
+-static struct nlmsgerr *nle;
+-
+-i = 0;
+-nlh = (struct nlmsghdr*)nltxbuffer;
+-nlh->nlmsg_type = RTM_NEWLINK;
+-nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+-nlh->nlmsg_seq = nlseqcounter++;
+-nlh->nlmsg_pid = hcxpid;
+-i += sizeof(struct nlmsghdr);
+-ifih = (struct ifinfomsg*)(nltxbuffer+ i);
+-ifih->ifi_family = 0;
+-ifih->ifi_type = 0;
+-ifih->ifi_index = ifaktindex;
+-ifih->ifi_flags = condition;
+-ifih->ifi_change = 1;
+-i += sizeof(struct ifinfomsg);
+-nlh->nlmsg_len = i;
+-if((write(fd_socket_rt, nltxbuffer, i)) != i) return false;
+-while(1)
+-	{
+-	msglen = read(fd_socket_rt, &nlrxbuffer, NLRX_SIZE);
+-	if(msglen == -1) break;
+-	if(msglen == 0) break;
+-	for(nlh = (struct nlmsghdr*)nlrxbuffer; NLMSG_OK(nlh, (u32)msglen); nlh = NLMSG_NEXT(nlh, msglen))
+-		{
+-		if(nlh->nlmsg_type == NLMSG_DONE) return false;
+-		if(nlh->nlmsg_type == NLMSG_ERROR)
+-			{
+-			nle = (struct nlmsgerr*)(nlrxbuffer + sizeof(struct nlmsghdr));
+-			if(nle->error == 0) return true;
+-			errorcount++;
+-			return false;
+-			}
+-		}
+-	}
+-return false;
+ }
+ /*---------------------------------------------------------------------------*/
+ static bool rt_get_interfacestatus(void)
+@@ -4740,7 +4467,7 @@
+ 			return false;
+ 			}
+ 		ifih = (struct ifinfomsg*)NLMSG_DATA(nlh);
+-		if((ifih->ifi_flags & IFF_UP) == IFF_UP) ifaktstatus |= IF_STAT_UP;
++		if((ifih->ifi_index == ifaktindex) && ((ifih->ifi_flags & IFF_UP) == IFF_UP)) ifaktstatus |= IF_STAT_UP;
+ 		}
+ 	}
+ return false;
+@@ -4888,149 +4615,45 @@
+ return false;
+ }
+ /*===========================================================================*/
+-static void usrfrequency_to_scanlist(u16 ufrq)
++static bool set_interface(bool interfacefrequencyflag, char *userfrequencylistname, char *userchannellistname)
+ {
+ size_t i;
+-
+-if(ufrq == 0) return;
+-for(i = 0; i < (FREQUENCYLIST_MAX -1); i++)
+-	{
+-	if((ifaktfrequencylist + i)->status == 0)
+-		{
+-		if((ifaktfrequencylist + i)->frequency == ufrq)
+-			{
+-			(scanlist + scanlistindex)->frequency = ufrq;
+-			(scanlist + scanlistindex)->channel = frequency_to_channel(ufrq);
+-			scanlistindex++;
+-			if(scanlistindex >= (FREQUENCYLIST_MAX -1)) return;
+-			return;
+-			}
+-		}
+-	}
+-return;
+-}
+-/*---------------------------------------------------------------------------*/
+-static bool set_interface(bool interfacefrequencyflag, char *userfrequencylistname, char *userchannellistname)
+-{
+-static size_t i;
+-static char *ufld = NULL;
+-static char *tokptr = NULL;
+-static char *userband = NULL;
+-static u16 uband;
+-static u32 ufreq;
+-
+-if(ifaktindex == 0)
+-	{
+-	for(i = 0; i < ifpresentlistcounter; i++)
+-		{
+-		if(((ifpresentlist + i)->type & IF_HAS_NLMON) == IF_HAS_NLMON)
+-			{
+-			ifaktwiphy = (ifpresentlist + i)->wiphy;
+-			ifaktindex = (ifpresentlist + i)->index;
+-			ifakttype = (ifpresentlist + i)->type;
+-			memcpy(ifaktname, (ifpresentlist + i)->name, IF_NAMESIZE);
+-			memcpy(ifakthwmac, (ifpresentlist + i)->hwmac, ETH_ALEN);
+-			ifaktfrequencylist = (ifpresentlist + i)->frequencylist;
+-			break;
+-			}
+-		}
+-	}
+-else
+-	{
+-	for(i = 0; i < ifpresentlistcounter; i++)
+-		{
+-		if((ifpresentlist + i)->index == ifaktindex)
+-			{
+-			if(((ifpresentlist + i)->type & IF_HAS_NLMON) == 0) return false;
+-			ifakttype = (ifpresentlist + i)->type;
+-			memcpy(ifakthwmac, (ifpresentlist + i)->hwmac, ETH_ALEN);
+-			ifaktfrequencylist = (ifpresentlist + i)->frequencylist;
+-			break;
+-			}
+-		}
+-	}
+-if(ifaktfrequencylist == NULL) return false;
+-if(rt_set_interface(0) == false) return false;
+-if(rt_set_interfacemac() == false) vmflag = false;
+-if(nl_set_monitormode() == false) return false;
+-if(rt_set_interface(IFF_UP) == false) return false;
+-nl_set_powersave_off();
+-if(nl_get_interfacestatus() == false) return false;
+-if(rt_get_interfacestatus() == false) return false;
++(void)interfacefrequencyflag;
++(void)userfrequencylistname;
++(void)userchannellistname;
++nethunter_policy.interface_ready = false;
++if(!nethunter_interface_set || ifaktindex == 0) return false;
++for(i = 0; i < ifpresentlistcounter; i++)
++    {
++    if((ifpresentlist + i)->index != ifaktindex) continue;
++    ifakttype = (ifpresentlist + i)->type;
++    ifaktwiphy = (ifpresentlist + i)->wiphy;
++    memcpy(ifakthwmac, (ifpresentlist + i)->hwmac, ETH_ALEN);
++    ifaktfrequencylist = (ifpresentlist + i)->frequencylist;
++    break;
++    }
++if(i == ifpresentlistcounter) return false;
++ifaktstatus = 0;
++nethunter_current_frequency = 0;
++if(!nl_get_interfacestatus() || !rt_get_interfacestatus()) return false;
++if((ifaktstatus & IF_STAT_OK) != IF_STAT_OK ||
++   nethunter_current_frequency != nethunter_frequency)
++    {
++    fprintf(stderr, "nethunter-pmkid-1: interface must already be UP/MONITOR at %u MHz (reported %u MHz, status %u)\n",
++            nethunter_frequency, nethunter_current_frequency, ifaktstatus);
++    return false;
++    }
+ scanlistindex = 0;
+-if(interfacefrequencyflag == true)
+-	{
+-	for(i = 0; i < (FREQUENCYLIST_MAX -1); i++)
+-		{
+-		if((ifaktfrequencylist + i)->status == 0)
+-			{
+-			(scanlist + scanlistindex)->frequency = (ifaktfrequencylist + i)->frequency;
+-			(scanlist + scanlistindex)->channel = (ifaktfrequencylist + i)->channel;
+-			scanlistindex++;
+-			if(scanlistindex >= (FREQUENCYLIST_MAX -1)) break;
+-			}
+-		if((ifaktfrequencylist + i)->frequency == 0) break;
+-		}
+-	}
+-else if((userfrequencylistname != NULL) || (userchannellistname != NULL))
+-	{
+-	if(userfrequencylistname != NULL)
+-		{
+-		ufld = strdup(userfrequencylistname);
+-		tokptr = strtok(ufld, ",");
+-		while((tokptr != NULL) && (i < (SCANLIST_MAX - 1)))
+-			{
+-			usrfrequency_to_scanlist(strtol(tokptr, NULL, 10));
+-			tokptr = strtok(NULL, ",");
+-			}
+-		free(ufld);
+-		}
+-	if(userchannellistname != NULL)
+-		{
+-		ufld = strdup(userchannellistname);
+-		tokptr = strtok(ufld, ",");
+-		while((tokptr != NULL) && (i < (SCANLIST_MAX - 1)))
+-			{
+-			uband = strtol(tokptr, &userband, 10);
+-			if(userband[0] == 'a') ufreq = channel_to_frequency(uband, NL80211_BAND_2GHZ);
+-			else if(userband[0] == 'b') ufreq = channel_to_frequency(uband, NL80211_BAND_5GHZ);
+-			#if(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
+-			else if(userband[0] == 'c') ufreq = channel_to_frequency(uband, NL80211_BAND_6GHZ);
+-			else if(userband[0] == 'd') ufreq = channel_to_frequency(uband, NL80211_BAND_60GHZ);
+-			else if(userband[0] == 'e') ufreq = channel_to_frequency(uband, NL80211_BAND_S1GHZ);
+-			#endif
+-			usrfrequency_to_scanlist(ufreq);
+-			tokptr = strtok(NULL, ",");
+-			}
+-		free(ufld);
+-		}
+-	}
+-else
+-	{
+-	(scanlist + scanlistindex)->frequency = 2412;
+-	(scanlist + scanlistindex++)->channel = 1;
+-	(scanlist + scanlistindex)->frequency = 2437;
+-	(scanlist + scanlistindex++)->channel = 6;
+-	(scanlist + scanlistindex)->frequency = 2462;
+-	(scanlist + scanlistindex++)->channel = 11;
+-	(scanlist + scanlistindex)->frequency = 0;
+-	(scanlist + scanlistindex)->channel = 0;
+-	}
+-scanlistindex = 0;
+-if(nl_set_frequency() == false) return false;
++scanlist[0].frequency = nethunter_frequency;
++scanlist[0].channel = frequency_to_channel(nethunter_frequency);
++nethunter_policy.interface_ready = true;
+ return true;
+ }
+ /*===========================================================================*/
+ static bool set_monitormode(void)
+ {
+-if(rt_set_interface(0) == false) return false;
+-if(nl_set_monitormode() == false) return false;
+-if(rt_set_interface(IFF_UP) == false) return false;
+-if(nl_get_interfacestatus() == false) return false;
+-if(rt_get_interfacestatus() == false) return false;
+-show_interfacecapabilities();
+-fprintf(stdout, "\n\nmonitor mode has been activated...\n");
+-return true;
++/* All mutation modes are forbidden; monitor preparation belongs to the app. */
++return false;
+ }
+ /*===========================================================================*/
+ static bool get_interfacelist(void)
+@@ -5117,7 +4740,7 @@
+ /*---------------------------------------------------------------------------*/
+ static bool open_socket_rx(char *bpfname)
+ {
+-static size_t c = 10;
++size_t c;
+ static struct sockaddr_ll saddr;
+ static struct packet_mreq mrq;
+ #if(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0))
+@@ -5128,6 +4751,7 @@
+ static socklen_t priolen;
+ 
+ bpf.len = 0;
++nethunter_policy.bpf_attached = false;
+ if(bpfname != NULL)
+ 	{
+ 	if(read_bpf(bpfname) == false)
+@@ -5148,14 +4772,21 @@
+ #if(LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0))
+ if(setsockopt(fd_socket_rx, SOL_PACKET, PACKET_IGNORE_OUTGOING, &enable, sizeof(int)) < 0) fprintf(stderr, "PACKET_IGNORE_OUTGOING is not supported by kernel\nfalling back to validate radiotap header length\n");
+ #endif
++if(bpf.len == 0)
++	{
++	fprintf(stderr, "nethunter-pmkid-1: mandatory BPF is missing or empty\n");
++	return false;
++	}
+ if(bpf.len > 0)
+ 	{
+-	if(setsockopt(fd_socket_rx, SOL_SOCKET, SO_ATTACH_FILTER, &bpf, sizeof(bpf)) < 0)
++	if(!nh_pmkid_attach_filter(&nethunter_policy, fd_socket_rx, &bpf, nethunter_attach_bpf))
+ 		{
+ 		fprintf(stderr, "failed to attach BPF (SO_ATTACH_FILTER): %s\n", strerror(errno));
+ 		#ifdef HCXDEBUG
+ 		fprintf(fh_debug, "SO_ATTACH_FILTER failed: %s\n", strerror(errno));
+ 		#endif
++		errorcount++;
++		return false;
+ 		}
+ 	}
+ memset(&saddr, 0, sizeof(saddr));
+@@ -5167,11 +4798,10 @@
+ if(bind(fd_socket_rx, (struct sockaddr*) &saddr, sizeof(saddr)) < 0) return false;
+ if((socket_rx_flags = fcntl(fd_socket_rx, F_GETFL, 0)) < 0) return false;
+ if(fcntl(fd_socket_rx, F_SETFL, socket_rx_flags | O_NONBLOCK) < 0) return false;
+-while((!wanteventflag) || (c != 0))
++for(c = 0; (c < 10) && (wanteventflag == 0); c++)
+ 	{
+ 	packetlen = read(fd_socket_rx, epb +EPB_SIZE, PCAPNG_SNAPLEN);
+-	if(packetlen == -1) break;
+-	c--;
++	if(packetlen <= 0) break;
+ 	}
+ return true;
+ }
+@@ -5344,16 +4974,8 @@
+ macaprg[2] = ouiaprg & 0xff;
+ macaprg[1] = (ouiaprg >> 8) & 0xff;
+ macaprg[0] = (ouiaprg >> 16) & 0xff;
+-ouiclientrg = (vendorclientrg[rand() % ((VENDORCLIENTRG_SIZE / sizeof(int)))]) &0xffffff;
+-nicclientrg = rand() & 0xffffff;
+-macclientrg[7] = 0;
+-macclientrg[6] = 0;
+-macclientrg[5] = nicclientrg & 0xff;
+-macclientrg[4] = (nicclientrg >> 8) & 0xff;
+-macclientrg[3] = (nicclientrg >> 16) & 0xff;
+-macclientrg[2] = ouiclientrg & 0xff;
+-macclientrg[1] = (ouiclientrg >> 8) & 0xff;
+-macclientrg[0] = (ouiclientrg >> 16) & 0xff;
++/* The dedicated injection identity comes from the caller, never another client. */
++memcpy(macclientrg, nethunter_policy.client, ETH_ALEN);
+ memcpy(weakcandidate, WEAKCANDIDATEDEF, WEAKCANDIDATEDEF_SIZE);
+ replaycountrg = (rand() % 0xfff) + 0xf000;
+ eapolm1wpa1data[0x17] = (replaycountrg >> 8) &0xff;
+@@ -5377,25 +4999,29 @@
+ {
+ static size_t i;
+ 
+-for(i = 0; i < CALIST_MAX; i++)
+-	{
+-	if((calist + i)->cadata != NULL) free((calist + i)->cadata);
+-	}
+-if(calist != NULL) free(calist);
+-
+-for(i = 0; i < APRGLIST_MAX; i++)
+-	{
+-	if((aprglist + i)->apdata != NULL) free((aprglist + i)->apdata);
+-	}
+-if(aprglist != NULL) free(aprglist);
+-
+-for(i = 0; i < APLIST_MAX; i++)
+-	{
+-	if((aplist + i)->apdata != NULL) free((aplist + i)->apdata);
+-	}
+-if(aplist != NULL) free(aplist);
+-
+-if(scanlist != NULL) free(scanlist);
++if(calist != NULL)
++	{
++	for(i = 0; i < CALIST_MAX; i++) free((calist + i)->cadata);
++	free(calist);
++	calist = NULL;
++	}
++
++if(aprglist != NULL)
++	{
++	for(i = 0; i < APRGLIST_MAX; i++) free((aprglist + i)->apdata);
++	free(aprglist);
++	aprglist = NULL;
++	}
++
++if(aplist != NULL)
++	{
++	for(i = 0; i < APLIST_MAX; i++) free((aplist + i)->apdata);
++	free(aplist);
++	aplist = NULL;
++	}
++
++free(scanlist);
++scanlist = NULL;
+ if(ifpresentlist != NULL)
+ 	{
+ 	for(i = 0; i < ifpresentlistcounter; i++)
+@@ -5403,6 +5029,8 @@
+ 		if((ifpresentlist + i)->frequencylist != NULL) free((ifpresentlist + i)->frequencylist);
+ 		}
+ 	free(ifpresentlist);
++	ifpresentlist = NULL;
++	ifpresentlistcounter = 0;
+ 	}
+ return;
+ }
+@@ -5727,213 +5355,17 @@
+ __attribute__ ((noreturn))
+ static inline void usage_additional(char *eigenname)
+ {
+-fprintf(stdout, "%s %s  (C) %s ZeroBeat\n"
+-	"Additional information (for commonly used options use -h):\n----------------------------------------------------------\n"
+-	"press GPIO button to terminate\n"
+-	" hardware modification is necessary, read more:\n"
+-	" https://github.com/ZerBea/hcxdumptool/tree/master/docs\n"
+-	"to store entire traffic, run tshark in parallel on the same interface:\n"
+-	" $ tshark -i <interface> -w allframes.pcapng\n"
+-	"\n"
+-	"Berkeley Packet Filter:\n"
+-	"-----------------------\n"
+-	"Before you start %s\n"
+-	" 1. always get general information about the target (ESSID, CHANNEL, MAC_AP. IN/OFF RANGE)\n"
+-	"  %s --rcascan=active -F\n"
+-	" 2. always get more information about the behavior of the target (CLIENTS, FRAME TYPES)\n"
+-	"  tshark\n"
+-	" 3. always design a filter tailored to the target and compile it\n"
+-	"  %s --bpfc\n"
+-	" 4. always test the filter\n"
+-	"  tshark -f\n"
+-	" 5. always apply the designed filter\n"
+-	"  %s --bpf\n"
+-	" Further information:\n" 
+-	"  see man bpfc\n"
+-	"  see docs/example.md\n"
+-	"  see https://docs.kernel.org/bpf\n"
+-	"\n"
+-	"Linux Signals:\n"
+-	"--------------\n"
+-	" SIGINT = terminate\n"
+-	" SIGTERM = terminate\n"
+-	" SIGKILL = terminate\n"
+-	" SIGTSTP = terminate\n"
+-	" SIGUSR1 = terminate and ignore commandline options\n"
+-	"\n"
+-	"Important recommendation:\n"
+-	"-------------------------\n"
+-	"Do not run %s on a shared interface, because this leads to an unexpected behavior!\n"
+-	"Do not set monitor mode by third party tools (e.g. iwconfig)!\n"
+-	"Do not run other tools that take access to the interface in parallel (except: tshark, wireshark, tcpdump)!\n"
+-	"Do not use virtual machines or emulators!\n"
+-	"Do not use tools to change the virtual MAC (like macchanger)!\n"
+-	"Do not merge (pcapng) dump files, because this destroys assigned hash values!\n"
+-	"\n",
+-	eigenname, VERSION_TAG, VERSION_YEAR, eigenname, eigenname, eigenname, eigenname, eigenname);
++fprintf(stdout, "%s 8.0.0+nethunter-pmkid-1\n"
++    "Capture: --nethunter-target=<BSSID> --nethunter-client=<unicast LAA> -i <prepared monitor interface> -f <single MHz> --bpf=<compiled filter> -w <pcapng>\n"
++    "Options: --tot=<minutes> --associationmax=<attempts> --exitoneapol=1 --rds=4 --rdt\n"
++    "Compile only: --bpfc=<pcap-filter expression> [--bpfd=0] [--bpfo=1]; BPF is written to stdout.\n"
++    "All transmissions are restricted to the selected AP and dedicated client; interface settings remain app-owned.\n", eigenname);
+ exit(EXIT_SUCCESS);
+ }
+-/*---------------------------------------------------------------------------*/
+ __attribute__ ((noreturn))
+ static inline void usage(char *eigenname)
+ {
+-fprintf(stdout, "%s %s  (C) %s ZeroBeat\n"
+-	"usage: %s <options>\n"
+-	"\n"
+-	"most common options:\n--------------------\n"
+-	"-i <INTERFACE>   : name of INTERFACE to be used\n"
+-	"                    default: first suitable INTERFACE\n"
+-	"                    warning:\n"
+-	"                     %s changes the mode of the INTERFACE\n"
+-	"                     %s changes the virtual MAC address of the INTERFACE\n"
+-	"                     %s changes the channel of the INTERFACE\n"
+-	"-w <outfile>     : write packets to a pcapng-format file named <outfile>\n"
+-	"                    default outfile name: yyyyddmmhhmmss-interfacename.pcapng\n"
+-	"                    existing file will not be overwritten\n"
+-	"                    get more information: https://pcapng.com/\n"
+-	"-c <digit>       : set channel (1a,2a,36b,...)\n"
+-	"                    default: 1a,6a,11a\n"
+-	"                    important notice: channel numbers are not unique\n"
+-	"                    arming the interface will fail on unsupported channels/bands\n"
+-	"                    it is mandatory to add band information to the channel number (e.g. 12a)\n"
+-	"                     band a: NL80211_BAND_2GHZ\n"
+-	"                     band b: NL80211_BAND_5GHZ\n"
+-	#if(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
+-	"                     band c: NL80211_BAND_6GHZ\n"
+-	"                     band d: NL80211_BAND_60GHZ\n"
+-	"                     band e: NL80211_BAND_S1GHZ (902 MHz)\n"
+-	#endif
+-	"                    to disable frequency management, set this option to a single frequency/channel\n"
+-	"-f <digit>       : set frequency (2412,2417,5180,...)\n"
+-	"                    arming the interface will fail on unsupported frequencies\n"
+-	"-F               : use all available frequencies from INTERFACE\n"
+-	"-t <second>      : minimum stay time (will increase on new stations and/or authentications)\n"
+-	"                    default %d seconds\n"
+-	"-T <digit>       : stop channel hopping if AP has been detected by BEACON or PROBERESPONSE\n"
+-	"                    0 = do not stop channel hopping (default)\n"
+-	"                    1 = stop channel hopping\n"
+-	"-A               : ACK incoming frames\n"
+-	"                    INTERFACE must support active monitor mode\n"
+-	"                    Warning: active monitor mode is broken on many mt76 drivers\n"
+-	"-L               : show PHYSICAL INTERFACE list and terminate\n"
+-	"-l               : show PHYSICAL INTERFACE list (tabulator separated and greppable) and terminate\n"
+-	"-I <INTERFACE>   : show detailed information about INTERFACE and terminate\n"
+-#ifdef HCXWANTLIBPCAP
+-	"--bpfc=<filter>  : compile Berkeley Packet Filter (BPF) and exit\n"
+-	"                    $ %s --bpfc=\"wlan addr3 112233445566\" > filter.bpf\n"
+-	"                    see man pcap-filter\n"
+-	"--bpfd=<mode>    : set output mode for compiled Berkeley Packet Filter (BPF)\n"
+-	"                    default = 0\n"
+-	"                    0 = compile BPF code as decimal numbers (readable by --bpf)\n"
+-	"                    1 = compile BPF code as decimal numbers preceded with a count (readable by --bpf)\n"
+-	"                    2 = compile BPF code as a C program fragment (readable by --bpf)\n"
+-	"                    3 = compile BPF code as a ASM program (tcpdump style)\n"
+-	"                    4 = compile BPF code as as decimal numbers (bpf_debug style)\n"
+-	"                    see man pcap-filter\n"
+-	"--bpfo=<digit>   : enable or disable code optimization\n"
+-	"                    0 = code optimization disabled\n"
+-	"                    1 = code optimization enabled (default)\n"
+-#endif
+-	"--bpf=<file>     : input Berkeley Packet Filter (BPF) code (maximum %d instructions) in tcpdump decimal numbers format\n"
+-	"                    see --help for more information\n", 
+-#ifdef HCXWANTLIBPCAP
+-	eigenname, VERSION_TAG, VERSION_YEAR, eigenname, eigenname, eigenname, eigenname, TIMEHOLD, eigenname, BPF_MAXINSNS);
+-#else
+-	eigenname, VERSION_TAG, VERSION_YEAR, eigenname, eigenname, eigenname, eigenname, TIMEHOLD, BPF_MAXINSNS);
+-#endif
+-fprintf(stdout, "--ftc            : enable fake time clock\n"
+-	"--rds=<digit>    : enable real time display\n"
+-	"                    attack mode:\n"
+-	"                     0 = off / headless mode (default)\n"
+-	"                     1 = show APs on current channel, show CLIENTs (M1M2ROGUE)\n"
+-	"                     2 = show all APs (M1M2, M1M2M3 or PMKID), show CLIENTs (M1M2ROGUE)\n"
+-	"                     3 = show all APs, show CLIENTs (M1M2ROGUE)\n"
+-	"                       columns mode 1-3:\n"
+-	"                        CHA|LAST|EA123P|MAC-CL|MAC-AP|ESSID          (SCAN:  frequency/channel)\n"
+-	"                       column EA123P\n"
+-	"                        E = encryption (e)ncrypted / (o)pen\n"
+-	"                        A = AKM (p)re-shared key\n"
+-	"                        1 = received M1 (+)\n"
+-	"                        2 = received M1M2 (+)\n"
+-	"                        3 = received M1M2M3 (+)\n"
+-	"                        P = received PMKID (+)\n"
+-	"                     4 = show waterfall (PMKID & EAPOL)\n"
+-	"                       columns mode 4:\n"
+-	"                        TIME TYPE MAC_CLIENT MAC_AP ESSID\n"
+-	"                     MAC addresses generated by %s are capitalized\n"
+-	"                    rcascan mode\n"
+-	"                     0 = show APs on current channel sorted by BEACON timestamp\n"
+-	"                     1 = show APs on current channel sorted by PROBERESPONSE timestamp\n"
+-	"                     2 = show APs on current channel sorted by RSSI\n"
+-	"                     3 = show APs of all channels sorted by RSSI\n"
+-	"                     4 = show only APs in range on current channel sorted by PROBERESPONSE timestamp\n"
+-	"                          requires --rcascan=active\n"
+-	"                     5 = show only APs of all channels sorted by PROBERESPONSE timestamp\n"
+-	"                          requires --rcascan=active\n"
+-	"--rdt            : disable TIOCGWINSZ for real time displays\n"
+-	"--rcascan=<mode> : radio channel assessment scan\n"
+-	"                    (a)ctive = active scan (transmit undirected PROBEREQUEST frames)\n"
+-	"                     no PROBERESPONSE, AP is out of RANGE, packet injection is broken\n"
+-	"                    (p)assive = passive scan (listen only)\n"
+-	"-h               : show this help\n"
+-	"-v               : show version\n"
+-	"\n", eigenname);
+-fprintf(stdout, "less common options:\n--------------------\n"
+-	"-m <INTERFACE>            : set monitor mode and terminate\n"
+-	"--m2max=<digit>           : set maximum of received M1M2ROGUE\n"
+-	"                             default: %d M1M2ROGUE\n"
+-	"                             to reject CLIENTs set 0\n"
+-	"--associationmax=<digit>  : set maximum of attempts to associate with an AP\n"
+-	"                             default: %d attempts\n"
+-	"                             to disable association with an AP set 0\n"
+-	"--disable_disassociation  : do not transmit DISASSOCIATION frames\n"
+-	"--proberesponsetx=<digit> : transmit n PROBERESPONSEs from the ESSID ring buffer\n"
+-	"                             default: %d\n"
+-	"                             to disable transmission of PROBERESPONSE frames set 0\n"
+-	"--essidlist=<file>        : initialize ESSID list with these ESSIDs\n"
+-	"--errormax=<digit>        : set maximum allowed ERRORs\n"
+-	"                             default: %d ERRORs\n"
+-	"--watchdogmax=<seconds>   : set maximum TIMEOUT when no packets received\n"
+-	"                             default: %d seconds\n"
+-	"                             to disable the watchdog set 0 (this is not recommended)\n",
+-	CLIENTCOUNT_MAX, APCOUNT_MAX, PROBERESPONSETX_MAX, ERROR_MAX, WATCHDOG_MAX);
+-fprintf(stdout, "--tot=<digit>             : enable timeout timer in minutes\n"
+-	"--exitoneapol=<type>      : exit on first EAPOL occurrence:\n"
+-	"                             bitmask:\n"
+-	"                               1 = PMKID (from AP)\n"
+-	"                               2 = EAPOL M1M2M3 (authorized)\n"
+-	"                               4 = EAPOL M1M2 (not authorized)\n"
+-	"                               8 = EAPOL M1M2ROGUE (not authorized)\n"
+-	"                              16 = EAPOL M1\n"
+-	"                             target BPF filter is recommended\n"
+-	"--onsigterm=<action>      : action when the program has been terminated (poweroff, reboot)\n"
+-	"                             poweroff: power off system\n"
+-	"                             reboot:   reboot system\n"
+-	"--ongpiobutton=<action>   : action when the program has been terminated (poweroff, reboot)\n"
+-	"                             poweroff: power off system\n"
+-	"                             reboot:   reboot system\n"
+-	"--ontot=<action>          : action when the program has been terminated (poweroff, reboot)\n"
+-	"                             poweroff: power off system\n"
+-	"                             reboot:   reboot system\n"
+-	"--onwatchdog=<action>     : action when the program has been terminated (poweroff, reboot)\n"
+-	"                             poweroff: power off system\n"
+-	"                             reboot:   reboot system\n"
+-	"--onerror=<action>        : action when the program has been terminated (poweroff, reboot)\n"
+-	"                             poweroff: power off system\n"
+-	"                             reboot:   reboot system\n"
+-	"--gpio_button=<digit>     : Raspberry Pi GPIO pin number of button (2...27)\n"
+-	"                             push GPIO button (> 10 seconds) to terminate program\n"
+-	"                             default: 0 (GPIO not in use)\n"
+-	"--gpio_statusled=<digit>  : Raspberry Pi GPIO number of status LED (2...27)\n"
+-	"                             default: 0 (GPIO not in use)\n"
+-	"--daemonize               : daemonize\n"
+-	"                             status messages are suppressed\n"
+-	"                              to terminate %s send SIGTERM to its PID\n"
+-	"                              or press push button (modified Raspberry Pi)\n"
+-	"--help                    : show additional help (example and trouble shooting)\n"
+-	"--version                 : show version\n\n",
+-	eigenname);
+-exit(EXIT_SUCCESS);
++usage_additional(eigenname);
+ }
+ /*---------------------------------------------------------------------------*/
+ __attribute__ ((noreturn))
+@@ -5988,6 +5420,8 @@
+ static const char *short_options = "i:w:c:f:m:I:t:T:FLlAhHv";
+ static const struct option long_options[] =
+ {
++    {"nethunter-target", required_argument, NULL, HCX_NETHUNTER_TARGET},
++    {"nethunter-client", required_argument, NULL, HCX_NETHUNTER_CLIENT},
+ 	{"bpf",				required_argument,	NULL,	HCX_BPF},
+ #ifdef HCXWANTLIBPCAP
+ 	{"bpfc",			required_argument,	NULL,	HCX_BPFC},
+@@ -6022,10 +5456,40 @@
+ optind = 1;
+ optopt = 0;
+ while((auswahl = getopt_long(argc, argv, short_options, long_options, &index)) != -1)
+-	{
+-	switch (auswahl)
+-		{
+-		case HCX_IFNAME:
++    {
++    /* Reject every mode/action that can modify the interface or expand scope. */
++    switch(auswahl)
++        {
++        case HCX_NETHUNTER_TARGET: case HCX_NETHUNTER_CLIENT:
++        case HCX_IFNAME: case HCX_PCAPNGNAME: case HCX_SET_SCANLIST_FROM_USER_FREQ:
++        case HCX_BPF: case HCX_TOT: case HCX_ERROR_MAX: case HCX_WATCHDOG_MAX:
++        case HCX_DISABLE_DISASSOCIATION: case HCX_M1M2ROGUE_MAX:
++        case HCX_APCOUNT_MAX: case HCX_PRTX_MAX: case HCX_EXIT_ON_EAPOL:
++        case HCX_RDS: case HCX_RDT: case HCX_HELP: case HCX_HELP_ADDITIONAL:
++        case HCX_VERSION:
++#ifdef HCXWANTLIBPCAP
++        case HCX_BPFC: case HCX_BPFD: case HCX_BPFO:
++#endif
++            break;
++        default:
++            fprintf(stderr, "nethunter-pmkid-1: unsupported option\n");
++            exit(EXIT_FAILURE);
++        }
++    switch (auswahl)
++        {
++        case HCX_NETHUNTER_TARGET:
++        if(nethunter_target_set || !nh_parse_mac(optarg, nethunter_policy.target, false))
++            { fprintf(stderr, "invalid or repeated --nethunter-target\n"); exit(EXIT_FAILURE); }
++        nethunter_target_set = true;
++        break;
++        case HCX_NETHUNTER_CLIENT:
++        if(nethunter_client_set || !nh_parse_mac(optarg, nethunter_policy.client, true))
++            { fprintf(stderr, "invalid or repeated --nethunter-client (requires unicast LAA)\n"); exit(EXIT_FAILURE); }
++        nethunter_client_set = true;
++        break;
++        case HCX_IFNAME:
++        if(nethunter_interface_set) { fprintf(stderr, "repeated -i\n"); exit(EXIT_FAILURE); }
++        nethunter_interface_set = true;
+ 		if((ifaktindex = if_nametoindex(optarg)) == 0)
+ 			{
+ 			perror("failed to get interface index");
+@@ -6071,6 +5535,9 @@
+ 		break;
+ 
+ 		case HCX_PCAPNGNAME:
++		if(nethunter_output_set || optarg == NULL || !*optarg)
++			{ fprintf(stderr, "-w requires exactly one nonempty output path\n"); exit(EXIT_FAILURE); }
++		nethunter_output_set = true;
+ 		pcapngoutname = optarg;
+ 		if(rcascanmode != 0)
+ 			{
+@@ -6083,8 +5550,11 @@
+ 		interfacefrequencyflag = true;
+ 		break;
+ 
+-		case HCX_SET_SCANLIST_FROM_USER_FREQ:
+-		userfrequencylistname = optarg;
++        case HCX_SET_SCANLIST_FROM_USER_FREQ:
++        nethunter_frequency_options++;
++        if(nethunter_frequency_options != 1 || !nh_parse_frequency(optarg, &nethunter_frequency))
++            { fprintf(stderr, "-f requires exactly one integer MHz value\n"); exit(EXIT_FAILURE); }
++        userfrequencylistname = optarg;
+ 		break;
+ 
+ 		case HCX_SET_SCANLIST_FROM_USER_CH:
+@@ -6151,6 +5621,7 @@
+ 		break;
+ 
+ 		case HCX_EXIT_ON_EAPOL:
++        if(strcmp(optarg, "1") != 0) { fprintf(stderr, "only --exitoneapol=1 is supported\n"); exit(EXIT_FAILURE); }
+ 		exiteapolflag = (atoi(optarg) & 0x0f) << 4;
+ 		exiteapolpmkidflag |= exiteapolflag & EXIT_ON_EAPOL_PMKID;
+ 		exiteapolm3flag |= exiteapolflag & EXIT_ON_EAPOL_M3;
+@@ -6321,6 +5792,23 @@
+ 	else exit(EXIT_FAILURE);
+ 	}
+ #endif
++if(optind != argc || !nethunter_target_set || !nethunter_client_set || !nethunter_output_set ||
++   !nethunter_interface_set || nethunter_frequency_options != 1 || bpfname == NULL || !*bpfname ||
++   memcmp(nethunter_policy.target, nethunter_policy.client, ETH_ALEN) == 0)
++    {
++    fprintf(stderr, "nethunter-pmkid-1: capture requires distinct --nethunter-target and LAA --nethunter-client, -i, one -f MHz, --bpf, and one nonempty -w output path\n");
++    return EXIT_FAILURE;
++    }
++nethunter_policy.configured = true;
++/* CLI cannot re-enable disruptive or rogue-AP/client behavior. */
++disassociationflag = false;
++proberesponsetxmax = 0;
++clientcountmax = 0;
++activemonitorflag = false;
++rcascanmode = 0;
++exiteapolflag = EXIT_ON_EAPOL_PMKID;
++exiteapolpmkidflag = EXIT_ON_EAPOL_PMKID;
++exiteapolm3flag = exiteapolm2flag = exiteapolm2rgflag = exiteapolm1flag = 0;
+ if(set_signal_handler() == false)
+ 	{
+ 	errorcount++;
+@@ -6645,6 +6133,6 @@
+ 		if(reboot(RB_POWER_OFF) == -1) fprintf(stderr, "can't power off\n");
+ 		}
+ 	}
+-return EXIT_SUCCESS;
++return (nethunter_tx_denied || ((wanteventflag & EXIT_ON_ERROR) != 0)) ? EXIT_FAILURE : EXIT_SUCCESS;
+ }
+ /*===========================================================================*/
