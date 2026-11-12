@@ -1,6 +1,7 @@
 package com.offsec.nethunter.Executor;
 
 import android.content.Context;
+import com.offsec.nethunter.wifi.WifiSessionGuard;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
@@ -209,11 +210,13 @@ public class CustomCommandsExecutor {
 	}
 
 	public static void run_cmd(String cmd) {
+		if (context.get() == null || !WifiSessionGuard.allowMutation(context.get())) return;
 		Intent intent = Bridge.createExecuteIntent("/data/data/com.offsec.nhterm/files/usr/bin/kali", cmd);
 		context.get().startActivity(intent);
 	}
 
 	public static void run_cmd_android(String cmd) {
+		if (context.get() == null || !WifiSessionGuard.allowMutation(context.get())) return;
 		Intent intent = Bridge.createExecuteIntent("/data/data/com.offsec.nhterm/files/usr/bin/android-su", cmd);
 		context.get().startActivity(intent);
 	}

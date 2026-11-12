@@ -1,5 +1,8 @@
 package com.offsec.nethunter;
 
+import com.offsec.nethunter.wifi.WifiSessionGuard;
+import com.offsec.nethunter.wifi.WifiSessionState;
+
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
@@ -85,14 +88,14 @@ public class WPSFragment extends Fragment {
         iswatch = sharedpreferences.getBoolean("running_on_wearos", false);
 
         // Enabling wifi in case it's down
-        if (iswatch) {
+        if (iswatch && WifiSessionGuard.allowMutation(requireContext())) {
             //firmware may not even be loaded, so let's enable wearos wifi first, then disable, finally up interface
             ExecutorService wifiExecutor = Executors.newSingleThreadExecutor();
             wifiExecutor.execute(() -> requireActivity().runOnUiThread(() -> {
                 Toast.makeText(requireActivity().getApplicationContext(), "wlan0 enabled successfully", Toast.LENGTH_LONG).show();
                 exe.RunAsRoot(new String[]{"settings put system clockwork_wifi_setting on; ifconfig wlan0 up; settings put system clockwork_wifi_setting off; sleep 2; ifconfig wlan0 up"});
             }));
-        } else exe.RunAsRoot(new String[]{"svc wifi enable"});
+        } else if (!iswatch && WifiSessionGuard.allowMutation(requireContext())) exe.RunAsRoot(new String[]{"svc wifi enable"});
 
         // Interface spinner setup
         ifaceSpinner = rootView.findViewById(R.id.wps_iface_spinner);
@@ -142,6 +145,7 @@ public class WPSFragment extends Fragment {
         // Reset interface
         Button resetifaceButton = rootView.findViewById(R.id.resetinterface);
         resetifaceButton.setOnClickListener(view -> {
+            if (!WifiSessionGuard.allowMutation(requireContext())) return;
             ExecutorService executor = Executors.newSingleThreadExecutor();
             executor.execute(() -> requireActivity().runOnUiThread(() -> {
                 if (iswatch) exe.RunAsRoot(new String[]{"ifconfig wlan0 down; sleep 1 && ifconfig wlan0 up"});
@@ -250,44 +254,57 @@ public class WPSFragment extends Fragment {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (iswatch)
+        if (iswatch && getContext() != null && WifiSessionGuard.allowMutation(requireContext()))
             exe.RunAsRoot(new String[]{"settings put system clockwork_wifi_setting on"});
     }
 
     private void scanWifi() {
+        final WifiSessionState.LegacyOperation operation = WifiSessionGuard.reserveMutation(requireContext());
+        if (operation == null) return;
+        final Activity scanActivity = requireActivity();
+        final View scanView = getView();
+        final String scanInterface = selectedInterface;
         arrayList.clear();
         arrayList.add("Scanning..");
         WPSList.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_list_item_1, arrayList));
         WPSList.setVisibility(View.VISIBLE);
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(() -> {
-            // Use the iw binary bundled with the app to scan and extract only WPS-enabled networks as "BSSID SSID"
-            String iwPath = NhPaths.APP_SCRIPTS_BIN_PATH + "/iw";
-            File awkFile = new File("/system/bin/awk");
-            String outputScanLog;
+            try {
+                // Use the iw binary bundled with the app to scan and extract only WPS-enabled networks as "BSSID SSID"
+                String iwPath = NhPaths.APP_SCRIPTS_BIN_PATH + "/iw";
+                File awkFile = new File("/system/bin/awk");
+                String outputScanLog;
 
-            if (awkFile.exists()) {
-                String cmd = iwPath + " dev " + selectedInterface +
-                        " scan | awk 'BEGIN{bssid=\"\";ssid=\"\";wps=0} /^BSS /{ if (bssid!=\"\" && ssid!=\"\" && wps==1) {print bssid, ssid} bssid=$2; sub(/\\(.*/, \"\", bssid); ssid=\"\"; wps=0 } /SSID:/{ $1=\"\"; sub(/^ /,\"\"); ssid=$0 } /WPS:/{ wps=1 } END{ if (bssid!=\"\" && ssid!=\"\" && wps==1) {print bssid, ssid} }'";
-                outputScanLog = exe.RunAsRootOutput(cmd).trim();
-            } else {
-                outputScanLog = exe.RunAsRootOutput(NhPaths.APP_SCRIPTS_PATH + "/bootkali custom_cmd python3 /sdcard/nh_files/modules/oneshot.py -i " + selectedInterface + " -s | grep -E '[0-9])' | tr -s ' ' | cut -d ' ' -f 2-3");
-            }
-            requireActivity().runOnUiThread(() -> {
-                if (outputScanLog.isEmpty()) {
-                    final ArrayList<String> notargets = new ArrayList<>();
-                    notargets.add("No nearby WPS networks");
-                    WPSList.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_list_item_1, notargets));
-                } else if (outputScanLog.contains("command failed")) {
-                    final ArrayList<String> notargets = new ArrayList<>();
-                    notargets.add("Please reset the interface!");
-                    WPSList.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_list_item_1, notargets));
+                if (awkFile.exists()) {
+                    String cmd = iwPath + " dev " + scanInterface +
+                            " scan | awk 'BEGIN{bssid=\"\";ssid=\"\";wps=0} /^BSS /{ if (bssid!=\"\" && ssid!=\"\" && wps==1) {print bssid, ssid} bssid=$2; sub(/\\(.*/, \"\", bssid); ssid=\"\"; wps=0 } /SSID:/{ $1=\"\"; sub(/^ /,\"\"); ssid=$0 } /WPS:/{ wps=1 } END{ if (bssid!=\"\" && ssid!=\"\" && wps==1) {print bssid, ssid} }'";
+                    outputScanLog = exe.RunAsRootOutput(cmd).trim();
                 } else {
-                    final String[] targets = outputScanLog.split("\n");
-                    ArrayAdapter<String> targetsadapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_list_item_1, targets);
-                    WPSList.setAdapter(targetsadapter);
+                    outputScanLog = exe.RunAsRootOutput(NhPaths.APP_SCRIPTS_PATH + "/bootkali custom_cmd python3 /sdcard/nh_files/modules/oneshot.py -i " + scanInterface + " -s | grep -E '[0-9])' | tr -s ' ' | cut -d ' ' -f 2-3");
                 }
-            });
+                scanActivity.runOnUiThread(() -> {
+                    if (!isAdded() || getView() != scanView) return;
+                    if (outputScanLog.isEmpty()) {
+                        final ArrayList<String> notargets = new ArrayList<>();
+                        notargets.add("No nearby WPS networks");
+                        WPSList.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_list_item_1, notargets));
+                    } else if (outputScanLog.contains("command failed")) {
+                        final ArrayList<String> notargets = new ArrayList<>();
+                        notargets.add("Please reset the interface!");
+                        WPSList.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_list_item_1, notargets));
+                    } else {
+                        final String[] targets = outputScanLog.split("\n");
+                        ArrayAdapter<String> targetsadapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_list_item_1, targets);
+                        WPSList.setAdapter(targetsadapter);
+                    }
+                });
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Wi-Fi scan failed", e);
+            } finally {
+                operation.close();
+                executor.shutdown();
+            }
         });
     }
 
@@ -296,6 +313,7 @@ public class WPSFragment extends Fragment {
     ////
 
     public void run_cmd(String cmd) {
+        if (!WifiSessionGuard.allowMutation(activity)) return;
         Intent intent = Bridge.createExecuteIntent("/data/data/com.offsec.nhterm/files/usr/bin/kali", cmd);
         activity.startActivity(intent);
     }
@@ -304,6 +322,7 @@ public class WPSFragment extends Fragment {
     // Helper to route commands through TerminalFragment (saves memory vs external NhTerm)
     private void openTerminalWithCommand(String cmd) {
         if (!isAdded()) return;
+        if (!WifiSessionGuard.allowMutation(requireContext())) return;
         FragmentManager fm = requireActivity().getSupportFragmentManager();
         Fragment term = TerminalFragment.newInstanceWithCommand(R.id.terminal_item, cmd);
         if (fm.isStateSaved()) {

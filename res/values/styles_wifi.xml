@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="WifiActionCard" parent="Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">@color/system_card_button_bg</item>
+        <item name="cardCornerRadius">12dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="strokeColor">@color/md_theme_dark_outlineVariant</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="android:checkable">true</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="checkedIcon">@drawable/ic_wifi_selected</item>
+        <item name="checkedIconTint">@color/system_accent</item>
+        <item name="checkedIconSize">20dp</item>
+        <item name="checkedIconMargin">8dp</item>
+    </style>
+    <style name="WifiTargetMetric" parent="TextAppearance.Material3.LabelLarge">
+        <item name="android:textColor">@color/system_tab_text</item>
+        <item name="android:gravity">center</item>
+        <item name="android:padding">8dp</item>
+        <item name="android:background">@drawable/bg_card_tech</item>
+    </style>
+    <style name="WifiFileAction" parent="Tech.Button.Primary">
+        <item name="cornerRadius">12dp</item>
+        <item name="iconGravity">textTop</item>
+        <item name="iconPadding">8dp</item>
+        <item name="android:minHeight">96dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:layout_marginStart">0dp</item>
+        <item name="android:paddingTop">16dp</item>
+        <item name="android:paddingBottom">16dp</item>
+    </style>
+    <style name="WifiIconButton" parent="Widget.Material3.Button.IconButton">
+        <item name="iconTint">@color/system_tab_text</item>
+        <item name="android:minWidth">48dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:layout_marginStart">0dp</item>
+    </style>
+    <style name="WifiCaption" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:textColor">@color/system_tab_text</item>
+    </style>
+</resources>

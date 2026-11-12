@@ -47,6 +47,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"
@@ -118,6 +119,12 @@
                 android:minWidth="480dp"
                 tools:targetApi="n" />
         </activity>
+        <activity android:name=".WifiSessionActivity"
+            android:label="@string/wifi_capture_session"
+            android:theme="@style/Theme.Nethunter"
+            android:launchMode="singleTop"
+            android:exported="false"
+            android:parentActivityName=".AppNavHomeActivity" />
         <activity
             android:name=".EditSourceActivity"
             android:label="Edit Source"
@@ -162,6 +169,19 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".service.WifiSessionService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.wifi.captures"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/wifi_file_paths" />
+        </provider>
         <!--service
             android:name=".service.DummyAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="vertical" android:paddingBottom="8dp">
+    <LinearLayout style="@style/Tech.Card" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="12dp">
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="@string/wifi_email">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/wifi_account_email"
+                android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp"
+                android:inputType="textEmailAddress" android:maxLength="254" android:maxLines="1" android:importantForAutofill="no" />
+        </com.google.android.material.textfield.TextInputLayout>
+        <com.google.android.material.button.MaterialButton android:id="@+id/wifi_save_email" style="@style/Tech.Button.Primary"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp" android:text="@string/wifi_save" />
+        <com.google.android.material.button.MaterialButton android:id="@+id/wifi_dashboard" style="@style/Tech.Button.Outlined"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp" android:text="@string/wifi_dashboard" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="@string/wifi_upload_description" android:textAppearance="?android:attr/textAppearanceSmall" />
+    </LinearLayout>
+        <TextView android:id="@+id/wifi_upload_empty" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_gravity="center" android:gravity="center" android:padding="16dp"
+            android:text="@string/wifi_no_uploads" android:textColor="@color/system_tab_text" />
+</LinearLayout>

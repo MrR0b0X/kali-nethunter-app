@@ -1,5 +1,9 @@
 package com.offsec.nethunter;
 
+import com.offsec.nethunter.wifi.WifiCommands;
+import com.offsec.nethunter.wifi.WifiSessionGuard;
+import com.offsec.nethunter.wifi.WifiSessionState;
+
 import android.app.Activity;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -167,11 +171,7 @@ public class EvilTwinFragment extends Fragment {
         });
 
         // Scan button click listener
-        scanButton.setOnClickListener(v -> {
-            scanButton.setText("SCANNING... (10s)");
-            scanButton.setEnabled(false);
-            scanNetworks();
-        });
+        scanButton.setOnClickListener(v -> scanNetworks());
 
         // Start button click listener (toggle)
         startButton.setOnClickListener(v -> {
@@ -280,26 +280,24 @@ public class EvilTwinFragment extends Fragment {
     }
 
     private void scanNetworks() {
+        final Activity scanActivity = requireActivity();
+        final View scanView = getView();
+        Object selectedObj = interfaceSpinner.getSelectedItem();
+        if (selectedObj == null) {
+            appendLog("[-] No interface available. Please check your WiFi adapter.");
+            return;
+        }
+        final String selectedInterface;
+        try { selectedInterface = WifiCommands.iface(selectedObj.toString().split(" ")[0]); }
+        catch (IllegalArgumentException e) { appendLog("[-] " + e.getMessage()); return; }
+        final WifiSessionState.LegacyOperation operation = WifiSessionGuard.reserveMutation(requireContext());
+        if (operation == null) return;
+        scanButton.setText("SCANNING... (10s)");
+        scanButton.setEnabled(false);
         new Thread(() -> {
             try {
                 Log.d("EvilTwin", "Scan thread started");
                 ShellExecuter exe = new ShellExecuter();
-
-                // NULL CHECK - Get selected interface safely
-                Object selectedObj = interfaceSpinner.getSelectedItem();
-                if (selectedObj == null) {
-                    appendLog("[-] No interface available. Please check your WiFi adapter.");
-                    getActivity().runOnUiThread(() -> {
-                        scanButton.setText("SCAN NETWORKS");
-                        scanButton.setEnabled(true);
-                    });
-                    return;
-                }
-                String selectedInterface = selectedObj.toString();
-                // Parse interface name (remove band info)
-                if (selectedInterface.contains(" ")) {
-                    selectedInterface = selectedInterface.split(" ")[0];
-                }
                 
                 // Log scan start to both logcat and UI
                 Log.d("EvilTwin", "Starting scan on interface: " + selectedInterface);
@@ -365,7 +363,8 @@ if (_iwInfo.contains("type monitor")) {
                 // Verify interface is still in monitor mode
                 String verifyMode = exe.RunAsRootOutput("iw dev " + selectedInterface + " info 2>/dev/null | grep type | awk '{print $2}'");
                 Log.d("EvilTwin", "Before airodump - interface mode: '" + verifyMode + "'");
-                exe.RunAsChrootReturnValue("airodump-ng --band abg --output-format csv -w /sdcard/scan " + selectedInterface + " > /dev/null 2>&1 & sleep 10; pkill -9 -f airodump-ng");
+                exe.RunAsChrootReturnValue("timeout --signal=TERM --kill-after=2 10 airodump-ng --band abg --output-format csv -w /sdcard/scan "
+                        + WifiCommands.quote(WifiCommands.iface(selectedInterface)) + " > /dev/null 2>&1");
                 
                 Log.d("EvilTwin", "Scan finished, parsing CSV...");
                 String csvData = exe.RunAsRootOutput("awk -F, 'BEGIN {is_ap=1} /Station MAC/ {is_ap=0} is_ap && /^[0-9A-Fa-f]{2}:/ {gsub(/^[ \\t]+|[ \\t]+$/, \"\", $14); ssid = ($14 == \"\") ? \"HIDDEN\" : $14; printf \"%s|%s|%s\\n\", $1, $4, ssid}' /sdcard/scan-01.csv");
@@ -377,11 +376,12 @@ if (_iwInfo.contains("type monitor")) {
                 Log.d("EvilTwin", "Preparing UI bridge...");
                 
                 List<String> networks = new ArrayList<>();
-                ArrayAdapter<String> adapter = new ArrayAdapter<>(getActivity(), android.R.layout.simple_spinner_item, networks);
+                ArrayAdapter<String> adapter = new ArrayAdapter<>(scanActivity, android.R.layout.simple_spinner_item, networks);
                 
                 Log.d("EvilTwin", "Updating UI spinner...");
                 final String finalCsvData = csvData;
-                getActivity().runOnUiThread(() -> {
+                scanActivity.runOnUiThread(() -> {
+                    if (!isAdded() || getView() != scanView) return;
                     Log.d("EvilTwin", "UI updater running");
                     if (finalCsvData == null) return;
                     String[] lines = finalCsvData.split("\n");
@@ -401,13 +401,17 @@ if (_iwInfo.contains("type monitor")) {
                     targetSpinner.setAdapter(adapter);
                     Log.d("EvilTwin", "UI spinner updated");
                     
-                    // Restore scan button
-                    scanButton.setText("SCAN NETWORKS");
-                    scanButton.setEnabled(true);
                 });
                 Log.d("EvilTwin", "UI update posted");
             } catch (Exception e) {
                 Log.e("EvilTwin", "Scan error: " + e.getMessage());
+            } finally {
+                operation.close();
+                scanActivity.runOnUiThread(() -> {
+                    if (!isAdded() || getView() != scanView) return;
+                    scanButton.setText("SCAN NETWORKS");
+                    scanButton.setEnabled(true);
+                });
             }
         }).start();
     }
@@ -432,6 +436,7 @@ if (_iwInfo.contains("type monitor")) {
     }
 
     private void startAttack() {
+        if (!WifiSessionGuard.allowMutation(requireContext())) return;
         EvilTwinView.post(() -> {
             int targetY = EvilTwinScroll.getBottom();
             EvilTwinScroll.smoothScrollTo(0, targetY);
@@ -714,6 +719,7 @@ if (_iwInfo.contains("type monitor")) {
 
     // NH_PATCH_ET_STOP: revert monitor mode + reset interfaces on stop
     private void _revertMonitorMode() {
+        if (getContext() == null || !WifiSessionGuard.allowMutation(requireContext())) return;
         new Thread(() -> {
             try {
                 ShellExecuter exe = new ShellExecuter();

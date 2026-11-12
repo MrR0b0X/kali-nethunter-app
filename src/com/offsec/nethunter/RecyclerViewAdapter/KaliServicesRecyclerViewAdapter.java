@@ -1,5 +1,7 @@
 package com.offsec.nethunter.RecyclerViewAdapter;
 
+import com.offsec.nethunter.wifi.WifiSessionGuard;
+
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.SharedPreferences;
@@ -175,6 +177,10 @@ public class KaliServicesRecyclerViewAdapter extends RecyclerView.Adapter<KaliSe
 		});
 
 		itemViewHolder.mSwitch.setOnClickListener(v -> {
+			if (!WifiSessionGuard.allowMutation(context)) {
+				itemViewHolder.mSwitch.setChecked(!itemViewHolder.mSwitch.isChecked());
+				return;
+			}
 			if (itemViewHolder.mSwitch.isChecked()){
 				KaliServicesData.getInstance().startServiceforItem(position, itemViewHolder.mSwitch, context);
 			} else {

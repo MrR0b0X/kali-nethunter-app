@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="vertical" android:paddingBottom="8dp">
+    <LinearLayout style="@style/Tech.Card" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="12dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="@string/wifi_description" android:textAppearance="?android:attr/textAppearanceSmall" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp"
+            android:text="@string/wifi_adapter" android:labelFor="@id/wifi_adapter" />
+        <Spinner android:id="@+id/wifi_adapter" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:minHeight="48dp" />
+        <com.google.android.material.button.MaterialButton android:id="@+id/wifi_refresh_adapters"
+            style="@style/Tech.Button.Outlined" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:minHeight="48dp" android:text="@string/wifi_refresh_adapters" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:baselineAligned="false">
+            <com.google.android.material.button.MaterialButton android:id="@+id/wifi_scan"
+                style="@style/Tech.Button.Primary" android:layout_width="0dp" android:layout_weight="1"
+                android:layout_height="match_parent" android:minHeight="56dp" android:layout_marginEnd="6dp"
+                android:text="@string/wifi_scan" app:icon="@drawable/ic_search_black_24dp" app:iconGravity="textStart" />
+            <com.google.android.material.button.MaterialButton android:id="@+id/wifi_stop"
+                style="@style/Tech.Button.Outlined" android:layout_width="0dp" android:layout_weight="1"
+                android:layout_height="match_parent" android:minHeight="56dp" android:layout_marginStart="6dp"
+                android:text="@string/wifi_stop" app:icon="@drawable/ic_action_stop" app:iconTint="@color/system_accent" app:iconGravity="textStart" />
+        </LinearLayout>
+        <TextView android:id="@+id/wifi_session_status" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" android:text="@string/wifi_idle" android:textAppearance="@style/WifiCaption"
+            android:maxLines="3" android:ellipsize="end" android:accessibilityLiveRegion="polite" />
+        <ProgressBar android:id="@+id/wifi_network_busy" style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:indeterminate="true" android:visibility="gone" />
+    </LinearLayout>
+        <TextView android:id="@+id/wifi_network_empty" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center"
+            android:padding="16dp" android:text="@string/wifi_no_networks" android:textColor="@color/system_tab_text" />
+</LinearLayout>
