@@ -47,6 +47,7 @@ import com.offsec.nethunter.utils.NhPaths;
 import com.offsec.nethunter.utils.PermissionCheck;
 import com.offsec.nethunter.utils.SharePrefTag;
 import com.offsec.nethunter.utils.ShellExecuter;
+import com.offsec.nethunter.wifi.WifiSessionGuard;
 
 import java.io.File;
 import java.text.SimpleDateFormat;
@@ -111,6 +112,9 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        desiredFragment = getIntent().getBooleanExtra("open_wifi", false)
+                ? R.id.wifi_item : getIntent().getIntExtra("menuFragment", -1);
 
         context = getApplicationContext();
         nfcAdapter = NfcAdapter.getDefaultAdapter(this);
@@ -324,11 +328,6 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
             permissionWaitThread.start();
         }
 
-        int menuFragment = getIntent().getIntExtra("menuFragment", -1);
-        if (menuFragment != -1) {
-            Log.d(TAG, "menuFragment = " + menuFragment);
-            desiredFragment = menuFragment;
-        }
     }
 
     @Override
@@ -507,6 +506,12 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
 
         if (intent == null) return;
 
+        if (intent.getBooleanExtra("open_wifi", false)) {
+            setIntent(intent);
+            if (rootViewInitialized) openWifiScreen();
+            else desiredFragment = R.id.wifi_item;
+        }
+
         String action = intent.getAction();
         if (NfcAdapter.ACTION_TAG_DISCOVERED.equals(action) ||
                 NfcAdapter.ACTION_TECH_DISCOVERED.equals(action) ||
@@ -656,7 +661,7 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
         }
 
         // Enable chroot-dependent group
-        navigationView.getMenu().setGroupEnabled(R.id.chrootDependentGroup, true);
+        setChrootMenuEnabled(true);
 
         // Check for protocol-id issue
         String protocol_id;
@@ -697,7 +702,8 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
         startService(new Intent(context, CompatCheckService.class));
 
         if (desiredFragment != -1) {
-            changeDrawer(desiredFragment);
+            if (desiredFragment == R.id.wifi_item) openWifiScreen();
+            else changeDrawer(desiredFragment);
             desiredFragment = -1;
         }
     }
@@ -734,6 +740,7 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
     private void setupDrawerContent(NavigationView navigationView) {
         navigationView.setNavigationItemSelectedListener(
                 menuItem -> {
+                    if (!canOpenModule(menuItem.getItemId())) return false;
                     // only change it if is not the same as the last one
                     if (lastSelectedMenuItem != menuItem) {
                         //remove last
@@ -759,6 +766,7 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
     private void setupDrawerContentWear(NavigationView navigationViewWear) {
         navigationViewWear.setNavigationItemSelectedListener(
                 menuItem -> {
+                    if (!canOpenModule(menuItem.getItemId())) return false;
                     // only change it if is not the same as the last one
                     if (lastSelectedMenuItem != menuItem) {
                         //remove last
@@ -781,7 +789,39 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
                 });
     }
 
+    private void openWifiScreen() {
+        mTitle = getString(R.string.wifi_title);
+        boolean alreadyOpen = getSupportFragmentManager().findFragmentById(R.id.container) instanceof WifiFragment;
+        if (!alreadyOpen) titles.push(mTitle.toString());
+        if (lastSelectedMenuItem != null) lastSelectedMenuItem.setChecked(false);
+        if (navigationView != null) {
+            lastSelectedMenuItem = navigationView.getMenu().findItem(R.id.wifi_item);
+            if (lastSelectedMenuItem != null) lastSelectedMenuItem.setChecked(true);
+        }
+        if (!alreadyOpen) changeDrawer(R.id.wifi_item);
+        else ((WifiFragment) getSupportFragmentManager().findFragmentById(R.id.container)).showRequestedTab();
+        mDrawerLayout.closeDrawers();
+        restoreActionBar();
+    }
+
+    private void setChrootMenuEnabled(boolean enabled) {
+        Menu menu = navigationView.getMenu();
+        menu.setGroupEnabled(R.id.chrootDependentGroup, enabled);
+        // Its historical drawer position is in this group; library/uploads need no chroot.
+        menu.findItem(R.id.wifi_item).setEnabled(true);
+    }
+
+    private boolean canOpenModule(int itemId) {
+        if (itemId == R.id.eviltwin_item || itemId == R.id.wps_item
+                || itemId == R.id.wifipumpkin_item || itemId == R.id.macchanger_item
+                || itemId == R.id.createchroot_item) {
+            return WifiSessionGuard.allowMutation(this);
+        }
+        return true;
+    }
+
     private void changeDrawer(int itemId) {
+        if (!canOpenModule(itemId)) return;
         FragmentManager fragmentManager = getSupportFragmentManager();
         if (itemId == R.id.nethunter_item) {
             changeFragment(fragmentManager, NetHunterFragment.newInstance(itemId));
@@ -798,7 +838,9 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
         } else if (itemId == R.id.duckhunter_item) {
             changeFragment(fragmentManager, com.offsec.nethunter.DuckHunterFragment.newInstance(itemId));
         } else if (itemId == R.id.eviltwin_item) {
-    changeFragment(fragmentManager, new EvilTwinFragment());
+            changeFragment(fragmentManager, new EvilTwinFragment());
+        } else if (itemId == R.id.wifi_item) {
+            changeFragment(fragmentManager, WifiFragment.newInstance(itemId));
         } else if (itemId == R.id.usbarsenal_item) {
             if (exe.RunAsRootReturnValue("ls /config/usb_gadget/g1") == 0) {
                 changeFragment(fragmentManager, USBArsenalFragment.newInstance(itemId));
@@ -947,12 +989,13 @@ public class AppNavHomeActivity extends AppCompatActivity implements KaliGPSUpda
                     case CHECKCHROOT:
                         try{
                             if (intent.getBooleanExtra("ENABLEFRAGMENT", false)){
-                                navigationView.getMenu().setGroupEnabled(R.id.chrootDependentGroup, true);
+                                setChrootMenuEnabled(true);
                             } else {
-                                navigationView.getMenu().setGroupEnabled(R.id.chrootDependentGroup, false);
+                                setChrootMenuEnabled(false);
                                 if (lastSelectedMenuItem != null &&
                                     lastSelectedMenuItem.getItemId() != R.id.nethunter_item &&
-                                    lastSelectedMenuItem.getItemId() != R.id.createchroot_item) {
+                                    lastSelectedMenuItem.getItemId() != R.id.createchroot_item &&
+                                    lastSelectedMenuItem.getItemId() != R.id.wifi_item) {
                                     FragmentManager fragmentManager = getSupportFragmentManager();
                                     changeFragment(fragmentManager, NetHunterFragment.newInstance(R.id.nethunter_item));
                                 }

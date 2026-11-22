@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical">
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/wifi_tabs" android:layout_width="match_parent" android:layout_height="wrap_content"
+        app:tabMode="scrollable" app:tabGravity="center"
+        app:tabTextColor="@color/system_tab_text" app:tabSelectedTextColor="@color/system_accent"
+        app:tabIndicatorColor="@color/system_accent" />
+    <com.google.android.material.card.MaterialCardView android:id="@+id/wifi_open_session"
+        android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_margin="12dp"
+        android:minHeight="64dp" android:clickable="true" android:focusable="true" android:visibility="gone"
+        app:cardBackgroundColor="@color/hightech_card" app:cardCornerRadius="12dp" app:cardElevation="2dp"
+        app:strokeWidth="1dp" app:strokeColor="@color/md_theme_dark_outlineVariant">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="12dp">
+        <androidx.appcompat.widget.AppCompatTextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="@string/wifi_view_session" android:textColor="@color/system_accent"
+            android:textAppearance="@style/TextAppearance.Material3.LabelLarge" android:drawablePadding="8dp"
+            app:drawableStartCompat="@drawable/ic_action_network_wifi" app:drawableTint="@color/system_accent" />
+        <TextView android:id="@+id/wifi_active_session_status" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" android:textAppearance="@style/WifiCaption" android:maxLines="2" android:ellipsize="end" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+    <androidx.viewpager2.widget.ViewPager2 android:id="@+id/wifi_pager"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+</LinearLayout>

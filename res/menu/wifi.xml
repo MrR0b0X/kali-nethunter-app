@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/wifi_menu_refresh" android:title="@string/wifi_refresh" />
+    <item android:id="@+id/wifi_menu_setup" android:title="@string/wifi_setup" />
+    <item android:id="@+id/wifi_menu_restore" android:title="@string/wifi_restore" />
+</menu>

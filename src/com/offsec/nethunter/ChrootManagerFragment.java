@@ -1,5 +1,7 @@
 package com.offsec.nethunter;
 
+import com.offsec.nethunter.wifi.WifiSessionGuard;
+
 import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
@@ -394,6 +396,7 @@ public class ChrootManagerFragment extends Fragment {
             ad.setMessage("The Chroot Path is prefixed to \n\"/data/local/nhsystem/\"");
             ad.setView(ll);
             ad.setButton(DialogInterface.BUTTON_POSITIVE, "Apply", (d,i)->{
+                if (!WifiSessionGuard.allowMutation(activity)) return;
                 if (chrootPathEditText.getText().toString().matches(INVALID_PATH_REGEX)) {
                     NhPaths.showMessage(activity, "Invalid Name.");
                 } else {

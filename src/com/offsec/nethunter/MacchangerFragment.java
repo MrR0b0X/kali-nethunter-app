@@ -1,5 +1,7 @@
 package com.offsec.nethunter;
 
+import com.offsec.nethunter.wifi.WifiSessionGuard;
+
 import android.app.Activity;
 import android.content.Context;
 import android.os.Bundle;
@@ -402,5 +404,9 @@ public class MacchangerFragment extends Fragment {
 
     private void showToast(String message) { Toast.makeText(context, message, Toast.LENGTH_SHORT).show(); }
 
-    private void executeTask(Runnable task) { executorService.execute(task); }
+    private void executeTask(Runnable task) {
+        executorService.execute(() -> {
+            if (WifiSessionGuard.allowMutation(context)) task.run();
+        });
+    }
 }

@@ -7,6 +7,8 @@ import android.widget.TextView;
 import com.offsec.nethunter.ChrootManagerFragment;
 import com.offsec.nethunter.utils.NhPaths;
 import com.offsec.nethunter.utils.ShellExecuter;
+import com.offsec.nethunter.wifi.WifiSessionGuard;
+import com.offsec.nethunter.wifi.WifiSessionState;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -22,8 +24,16 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class ChrootManagerExecutor {
+    private static final AtomicInteger MUTATIONS = new AtomicInteger();
+    public static boolean isMutating() { return MUTATIONS.get() > 0; }
+
+    private boolean mutatesChroot() {
+        return ACTIONCODE == MOUNT_CHROOT || ACTIONCODE == UNMOUNT_CHROOT
+                || ACTIONCODE == INSTALL_CHROOT || ACTIONCODE == REMOVE_CHROOT || ACTIONCODE == BACKUP_CHROOT;
+    }
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private ChrootManagerExecutorListener listener;
@@ -44,10 +54,19 @@ public class ChrootManagerExecutor {
         this.ACTIONCODE = ACTIONCODE;
     }
     public void execute(Object... objects) {
+        boolean mutating = mutatesChroot();
+        WifiSessionState.LegacyOperation operation = mutating
+                ? WifiSessionGuard.reserveMutation(((TextView) objects[0]).getContext()) : null;
+        if (mutating && operation == null) return;
+        if (mutating) MUTATIONS.incrementAndGet();
         mainHandler.post(this::onPreExecute);
         executorService.submit(() -> {
-            doInBackground(objects);
-            mainHandler.post(this::onPostExecute);
+            try { doInBackground(objects); }
+            finally {
+                if (mutating) MUTATIONS.decrementAndGet();
+                if (operation != null) operation.close();
+                mainHandler.post(this::onPostExecute);
+            }
         });
     }
 
@@ -59,6 +78,12 @@ public class ChrootManagerExecutor {
     }
 
     protected void doInBackground(Object... objects) {
+        if (mutatesChroot()
+                && !WifiSessionGuard.allowMutation(((TextView) objects[0]).getContext())) {
+            resultCode = 1;
+            resultString.add("Restore or stop the Wi-Fi session before changing the chroot.");
+            return;
+        }
         switch (ACTIONCODE) {
             case ISSUE_BANNER:
                 exe.RunAsRootOutput("echo \"" + objects[1].toString() + "\"", ((TextView) objects[0]));

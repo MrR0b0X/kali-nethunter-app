@@ -1,5 +1,7 @@
 package com.offsec.nethunter.RecyclerViewAdapter;
 
+import com.offsec.nethunter.wifi.WifiSessionGuard;
+
 import android.content.Context;
 import android.content.DialogInterface;
 import android.view.LayoutInflater;
@@ -104,7 +106,9 @@ public class CustomCommandsRecyclerViewAdapter extends RecyclerView.Adapter<Cust
             adEdit.show();
             return false;
         });
-        itemViewHolder.runButton.setOnClickListener(v -> CustomCommandsData.getInstance().runCommandforitem(position, context));
+        itemViewHolder.runButton.setOnClickListener(v -> {
+            if (WifiSessionGuard.allowMutation(context)) CustomCommandsData.getInstance().runCommandforitem(position, context);
+        });
     }
 
     @Override

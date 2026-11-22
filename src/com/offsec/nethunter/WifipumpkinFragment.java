@@ -1,5 +1,7 @@
 package com.offsec.nethunter;
 
+import com.offsec.nethunter.wifi.WifiSessionGuard;
+
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
@@ -238,6 +240,7 @@ public class WifipumpkinFragment extends Fragment {
 
         // Start
         StartButton.setOnClickListener( v -> {
+            if (!WifiSessionGuard.allowMutation(requireContext())) return;
             if (StartButton.getText().equals("Start")) {
                 String APiface_string = APinterface.getText().toString();
                 String NETiface_string = NETinterface.getText().toString();
