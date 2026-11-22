@@ -406,13 +406,21 @@ class Companion:
         self.interface = interface
         self.save_result = save_result
         self.print_debug = print_debug
+        self.wpas = self.retsock = None
+        self.tempdir = self.tempconf = self.res_socket_file = None
+
+        ensure_interface_available(interface)
 
         self.tempdir = tempfile.mkdtemp()
         with tempfile.NamedTemporaryFile(mode='w', suffix='.conf', delete=False) as temp:
             temp.write('ctrl_interface={}\nctrl_interface_group=root\nupdate_config=1\n'.format(self.tempdir))
             self.tempconf = temp.name
         self.wpas_ctrl_path = f"{self.tempdir}/{interface}"
-        self.__init_wpa_supplicant()
+        try:
+            self.__init_wpa_supplicant()
+        except BaseException:
+            self.cleanup()
+            raise
 
         self.res_socket_file = f"{tempfile._get_default_tempdir()}/{next(tempfile._get_candidate_names())}"
         self.retsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -434,12 +442,18 @@ class Companion:
 
     def __init_wpa_supplicant(self):
         print('[*] Running wpa_supplicant…')
-        cmd = 'wpa_supplicant -K -d -Dnl80211,wext,hostapd,wired -i{} -c{}'.format(self.interface, self.tempconf)
-        self.wpas = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+        cmd = ['wpa_supplicant', '-K', '-d', '-Dnl80211,wext,hostapd,wired',
+               '-i', self.interface, '-c', self.tempconf]
+        self.wpas = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, encoding='utf-8', errors='replace')
         # Waiting for wpa_supplicant control interface initialization
+        deadline = time.monotonic() + 10
         while not os.path.exists(self.wpas_ctrl_path):
-            pass
+            if self.wpas.poll() is not None:
+                raise RuntimeError('wpa_supplicant exited before its control interface was ready')
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Timed out waiting for the wpa_supplicant control interface')
+            time.sleep(0.05)
 
     def sendOnly(self, command):
         """Sends command to wpa_supplicant"""
@@ -811,11 +825,32 @@ class Companion:
                 raise KeyboardInterrupt
 
     def cleanup(self):
-        self.retsock.close()
-        self.wpas.terminate()
-        os.remove(self.res_socket_file)
-        shutil.rmtree(self.tempdir, ignore_errors=True)
-        os.remove(self.tempconf)
+        if self.wpas is not None:
+            if self.wpas.poll() is None:
+                self.wpas.terminate()
+                try:
+                    self.wpas.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.wpas.kill()
+                    self.wpas.wait()
+            else:
+                self.wpas.wait()
+            self.wpas.stdout.close()
+            self.wpas = None
+        if self.retsock is not None:
+            self.retsock.close()
+            self.retsock = None
+        for name in ('res_socket_file', 'tempconf'):
+            path = getattr(self, name, None)
+            if path is not None:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                setattr(self, name, None)
+        if self.tempdir is not None:
+            shutil.rmtree(self.tempdir, ignore_errors=True)
+            self.tempdir = None
 
     def __del__(self):
         self.cleanup()
@@ -1031,6 +1066,25 @@ class WiFiScanner:
             print('[-] No WPS networks found.')
             return
 
+def ensure_interface_available(iface):
+    for root in ('/data/vendor/wifi/wpa/sockets',
+                 '/proc/1/root/data/vendor/wifi/wpa/sockets'):
+        if os.path.exists(os.path.join(root, iface)):
+            raise RuntimeError('Android Wi-Fi owns {}. Turn off Android Wi-Fi before running OneShot.'.format(iface))
+    for path in pathlib.Path('/proc').glob('[0-9]*/cmdline'):
+        try:
+            argv = path.read_bytes().split(b'\0')
+        except OSError:
+            continue
+        if not argv or os.path.basename(argv[0]) != b'wpa_supplicant':
+            continue
+        encoded_iface = os.fsencode(iface)
+        if b'-i' + encoded_iface in argv or any(
+                arg == b'-i' and following == encoded_iface
+                for arg, following in zip(argv, argv[1:])):
+            raise RuntimeError('Another wpa_supplicant owns {} (PID {}). Stop that client before running OneShot.'.format(iface, path.parent.name))
+
+
 def ifaceUp(iface, down=False):
     if down:
         action = 'down'
@@ -1184,6 +1238,7 @@ if __name__ == '__main__':
         die('Unable to up interface "{}"'.format(args.interface))
 
     while True:
+        companion = None
         try:
             companion = Companion(args.interface, args.write, print_debug=args.verbose)
             if args.pbc:
@@ -1203,7 +1258,6 @@ if __name__ == '__main__':
                     else:
                         args.bssid = scanner.scan_network()
                 if args.bssid:
-                    companion = Companion(args.interface, args.write, print_debug=args.verbose)
                     if args.bruteforce:
                         companion.smart_bruteforce(args.bssid, args.pin, args.delay)
                     else:
@@ -1223,6 +1277,11 @@ if __name__ == '__main__':
             else:
                 print("\nAborting…")
                 break
+        except RuntimeError as error:
+            die(str(error))
+        finally:
+            if companion is not None:
+                companion.cleanup()
 
     if args.iface_down:
         ifaceUp(args.interface, down=True)
