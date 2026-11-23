@@ -499,9 +499,13 @@ public class VNCFragment extends Fragment {
                 desktopDialog();
             } else {
                 if (iswatch) {
-                    logToast("Use password 123456 with root user for KeX on Smartwatch.");
-                    run_cmd("echo -ne \"\\033]0;KeX Setup\\007\" && clear;echo 'Setting root:123456 KeX credentials..' && sleep 2 && echo 123456\\n123456\\nn\\n | vncpasswd;echo 'Done! Exiting..' && sleep 2 && exit");
-                } else run_cmd("echo -ne \"\\033]0;Setting up Server\\007\" && clear;chmod +x ~/.vnc/xstartup && clear;echo $'\n'\"Please enter your new VNC server password\"$'\n' && " + "if [ \"" + selected_user + "\" == \"root\" ]; then " + "  if [ ! -d /root/.config/tigervnc ]; then mkdir -p -m 0777 /root/.config/tigervnc; fi; " + "  sudo -u root vncpasswd; " + "  if [ ! -f ~/.vnc/passwd ]; then cp -rf ~/.config/tigervnc/passwd ~/.vnc/; fi; " + "else " + " user_uid=$(id -u " + selected_user + "); " + " if [ \"$user_uid\" -eq 100000 ] || [ \"$user_uid\" -eq 9000 ]; then " + " if [ ! -d /home/" + selected_user + "/.config/tigervnc ]; then mkdir -p -m 0777 /home/" + selected_user + "/.config/tigervnc; fi; " + "  sudo -u " + selected_user + " vncpasswd; " + "  if [ ! -f /home/" + selected_user + "/.vnc/passwd ]; then cp -rf /home/" + selected_user + "/.config/tigervnc/passwd /home/" + selected_user + "/.vnc/; fi; " + " fi; " + "fi && sleep 2 && exit"); // since is a kali command we can send it as is
+                    logToast("Login with password 123456 as root user in KeX app");
+                    run_cmd("echo -ne \"\\033]0;KeX Setup\\007\" && clear; [ -d /root/.config ] || mkdir /root/.config; [ -f /root/.vnc/xstartup ] || cp /sdcard/nh_files/configs/xstartup /root/.vnc/; " +
+                            "echo 'Setting root:123456 KeX credentials..' && sleep 2 && echo \"123456\\n123456\\n\\n\" | vncpasswd >/dev/null 2>&1; chmod +x ~/.vnc/xstartup; echo 'Done! Exiting..' && sleep 2 && exit");
+                } else run_cmd("echo -ne \"\\033]0;Setting up Server\\007\" && clear; echo $'\n'\"Please enter your new VNC server password\"$'\n' && " + "if [ \"" + selected_user + "\" == \"root\" ]; then " + "  if [ ! -d /root/.config/tigervnc ]; then mkdir -p -m 0777 /root/.config/tigervnc; fi; " +
+                        " sudo -u root vncpasswd; " + "  if [ ! -f ~/.vnc/passwd ]; then cp -rf ~/.config/tigervnc/passwd ~/.vnc/; fi; " + "else " + " user_uid=$(id -u " + selected_user + "); " +
+                        " if [ \"$user_uid\" -eq 100000 ] || [ \"$user_uid\" -eq 9000 ]; then " + " if [ ! -d /home/" + selected_user + "/.config/tigervnc ]; then mkdir -p -m 0777 /home/" + selected_user + "/.config/tigervnc; fi; " + "  sudo -u " + selected_user + " vncpasswd; " +
+                        " if [ ! -f /home/" + selected_user + "/.vnc/passwd ]; then cp -rf /home/" + selected_user + "/.config/tigervnc/passwd /home/" + selected_user + "/.vnc/; fi; " + " fi; " + "fi && chmod +x ~/.vnc/xstartup && sleep 2 && exit"); // since is a kali command we can send it as is
             }
         });
 	final TextView VNCstatus = rootView.findViewById(R.id.KeXstatus);
@@ -529,11 +533,14 @@ public class VNCFragment extends Fragment {
                 logToast("Starting server.. Please refresh the status in NetHunter app.");
                 if (selected_user.equals("root")) {
                         exe.RunAsRoot(new String[]{NhPaths.APP_SCRIPTS_PATH + "/bootkali custom_cmd service dbus start"});
+                    if (iswatch) {
+                        selected_vncresCMD = "-geometry 800x800";
                         run_cmd("echo -ne \"\\033]0;Starting Server\\007\" && clear;" + delay_cmd + "HOME=/root;USER=root;sudo -u root LD_PRELOAD=/usr/lib/" + arch_path +
                                 "/libgcc_s.so.1 nohup vncserver :" + selected_display + " " + localhostonly + "-name \"NetHunter KeX\" " + selected_vncresCMD + " >/dev/null 2>&1 </dev/null;echo \"Server started! Closing terminal..\" && sleep 2 && exit");
-                    } else {
-                        exe.RunAsRoot(new String[]{NhPaths.APP_SCRIPTS_PATH + "/bootkali custom_cmd service dbus start"});
-                        run_cmd("echo -ne \"\\033]0;Starting Server\\007\" && clear;" + delay_cmd + "HOME=/home/" + selected_user + ";USER=" + selected_user + ";sudo -u " + selected_user + " LD_PRELOAD=/usr/lib/" + arch_path +
+                    }
+                } else {
+                    exe.RunAsRoot(new String[]{NhPaths.APP_SCRIPTS_PATH + "/bootkali custom_cmd service dbus start"});
+                    run_cmd("echo -ne \"\\033]0;Starting Server\\007\" && clear;" + delay_cmd + "HOME=/home/" + selected_user + ";USER=" + selected_user + ";sudo -u " + selected_user + " LD_PRELOAD=/usr/lib/" + arch_path +
                                 "/libgcc_s.so.1 nohup vncserver :" + selected_display + " " + localhostonly + "-name \"NetHunter KeX\" " + selected_vncresCMD + " >/dev/null 2>&1 </dev/null;echo \"Server started! Closing terminal..\" && sleep 2 && exit");
                     }
                 Log.d(TAG, localhostonly);
@@ -869,7 +876,7 @@ public class VNCFragment extends Fragment {
     private void desktopDialog() {
         final MaterialAlertDialogBuilder dbusbuilder = new MaterialAlertDialogBuilder(requireActivity(), R.style.DialogStyleCompat);
         dbusbuilder.setMessage("There's no desktop environment installed. Would you like to install kali-desktop-xfce?");
-        dbusbuilder.setPositiveButton("Yes", (dialogInterface, i) -> run_cmd("echo -ne \"\\033]0;Installing XFCE\\007\" && clear;apt update && apt install -y kali-desktop-xfce tigervnc-standalone-server dbus-x11;apt clean; echo 'Done! Exiting..' && sleep 2 && exit"));
+        dbusbuilder.setPositiveButton("Yes", (dialogInterface, i) -> run_cmd("echo -ne \"\\033]0;Installing XFCE\\007\" && clear;apt update && apt install -y kali-desktop-xfce tigervnc-standalone-server dbus-x11 tigervnc-tools xfce4-goodies; apt clean; echo 'Done! Exiting..' && sleep 2 && exit"));
         dbusbuilder.setNegativeButton("No", (dialog, whichButton) -> {
         });
         dbusbuilder.show();
