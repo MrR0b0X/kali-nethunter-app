@@ -218,10 +218,17 @@ public class NetHunterFragment extends Fragment {
     }
 
     private boolean isStoragePermissionGranted() {
+        Context ctx = getContext();
+        boolean iswatch = requireActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_WATCH);
+        if (iswatch && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            return androidx.core.content.ContextCompat.checkSelfPermission(
+                    ctx, android.Manifest.permission.READ_MEDIA_IMAGES
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    || Environment.isExternalStorageManager();
+        }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             return Environment.isExternalStorageManager();
         } else {
-            Context ctx = getContext();
             if (ctx == null) return false;
             return androidx.core.content.ContextCompat.checkSelfPermission(
                     ctx, android.Manifest.permission.WRITE_EXTERNAL_STORAGE

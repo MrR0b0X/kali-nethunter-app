@@ -2,6 +2,7 @@ package com.offsec.nethunter.Executor;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -308,14 +309,21 @@ public class CopyBootFilesExecutor {
                 Runnable launch = () -> {
                     try {
                         boolean iswatch = activity.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WATCH);
+                        Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                        intent.setData(Uri.parse("package:" + activity.getPackageName()));
                         if (iswatch) {
-                            Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            activity.startActivity(intent);
+                            if (intent.resolveActivity(activity.getPackageManager()) != null) {
+                                try {
+                                    activity.startActivity(intent);
+                                    return;
+                                } catch (ActivityNotFoundException ignored) {
+                                    // Fall through to fallback
+                                }
+                            }
+                            mainHandler.post(() -> ActivityCompat.requestPermissions(activity, new String[]{Manifest.permission.READ_MEDIA_IMAGES}, 1001));
                         } else {
-                            Toast.makeText(requireActivity().getApplicationContext(), "Please allow storage access and return to app", Toast.LENGTH_SHORT).show();
-                            Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
-                            intent.setData(Uri.parse("package:" + activity.getPackageName()));
+                            Toast.makeText(requireActivity().getApplicationContext(), "Please allow storage access and return to app", Toast.LENGTH_LONG).show();
                             activity.startActivity(intent);
                         }
                     } catch (Exception e) {
